@@ -121,12 +121,12 @@ function vendorPrice(id) {
 }
 
 // Cheapest way to obtain one unit of an item: AH, vendor, or (optionally) crafting it.
-function makeBuyResolver(o) {
+function makeBuyResolver(o, scarce = null) {
   const memo = new Map(), visiting = new Set();
   function resolve(id) {
     if (memo.has(id)) return memo.get(id);
     let best = null;
-    const ah = ahPrice(id, o), vend = vendorPrice(id);
+    const ah = scarce?.get(id) ?? ahPrice(id, o), vend = vendorPrice(id);
     if (ah != null) best = { price: ah, src: "AH" };
     if (vend != null && (!best || vend < best.price)) best = { price: vend, src: "Vendor" };
     if (o.craftMats && !visiting.has(id) && state.byProduct[id]) {
@@ -506,19 +506,58 @@ function resultValue(id, o, mode, unitCost = 0) {
 // material cost minus what the result is worth, divided by the skill-up chance. A result that a
 // later step needs as a reagent is worth what it would otherwise cost to get. Which results are
 // needed depends on the path, so it's worked out a few times, each time with what the one before
-// needed, and the cheapest one wins (the first never counts on reuse, so it can only get better).
-const MIN_CHANCE = 0.1;
+// needed (the first never counts on reuse, so the best can only get better).
+//
+// Recipes are picked by price per unit, but the AH only has so many of anything. So once a path is
+// worked out, materials it needs more of than are listed get a scarcity price (what's listed at
+// its real price, the rest at SCARCE_PENALTY times the dearest listing) and it's all worked out
+// again, so recipes that lean on them lose out where something else will do. Paths are ranked the
+// same way, so one that needs materials nobody is selling can't win on a made-up price.
+const MIN_CHANCE = 0.1, SCARCE_PENALTY = 10, SCARCE_ROUNDS = 4;
 function levelPath(prof, from, to, o, mode) {
-  const resolve = makeBuyResolver(o);
+  const real = makeBuyResolver(o), scarce = new Map();
+  let best = null;
+  for (let round = 0; round < SCARCE_ROUNDS; round++) {
+    const resolve = round ? makeBuyResolver(o, scarce) : real;
+    let roundBest = null;
+    for (const plan of reusePasses(prof, from, to, o, mode, resolve, real)) {
+      if (!roundBest || plan.score < roundBest.score) roundBest = plan;
+    }
+    if (!best || roundBest.score < best.score) best = roundBest;
+    let changed = false;
+    for (const [id, short] of roundBest.short) {
+      const price = scarcePrice(id, roundBest.bought.get(id), short, o);
+      if (price > (scarce.get(id) || 0)) { scarce.set(id, price); changed = true; }
+    }
+    if (!changed) break;
+  }
+  best.resolve = real;
+  return best;
+}
+
+// What one unit of id effectively costs when n are needed and short of them aren't listed.
+function scarcePrice(id, n, short, o) {
+  const steps = ladderOf(id, ahPrice(id, o) ?? 0);
+  const top = steps.length ? steps[steps.length - 2] : 0;
+  let left = n - short, cost = 0;
+  for (let i = 0; i < steps.length && left > 0; i += 2) {
+    const t = Math.min(steps[i + 1], left);
+    cost += t * steps[i]; left -= t;
+  }
+  return (cost + short * top * SCARCE_PENALTY) / n;
+}
+
+function* reusePasses(prof, from, to, o, mode, resolve, real) {
   const cands = state.recipes.filter((r) => r.profession === prof && r.colors && (!o.trainerOnly || isTrainer(r)))
     .map((r) => {
       const pid = r.creates?.[0];
       const yieldN = r.creates?.[1] || 0, cost = recipeCost(r, resolve);
-      return { r, pid, yieldN, cost, value: pid ? resultValue(pid, o, mode, cost.total / yieldN) : 0 };
+      const unitCost = recipeCost(r, real).total / yieldN;
+      return { r, pid, yieldN, cost, value: pid ? resultValue(pid, o, mode, unitCost) : 0 };
     })
     .filter((c) => c.cost.complete);
 
-  let demand = new Map(), best = null;
+  let demand = new Map();
   for (let pass = 0; pass < 6; pass++) {
     const made = new Map(), steps = [];
     for (let s = from; s < to; s++) {
@@ -547,13 +586,11 @@ function levelPath(prof, from, to, o, mode) {
     for (const st of steps) {
       if (st.c) for (const [id, n] of st.c.r.reagents) next.set(id, (next.get(id) || 0) + n * Math.ceil(st.crafts));
     }
-    const plan = walkPath(steps, o, mode, resolve);
-    if (!best || plan.net < best.net) best = plan;
+    yield walkPath(steps, o, mode, resolve);
     const settled = next.size === demand.size && [...next].every(([k, v]) => demand.get(k) === v);
     demand = next;
     if (settled) break;
   }
-  return best;
 }
 
 // The AH's price steps for an item, cheapest first, as [price, count, price, count, ...]. Items
@@ -572,7 +609,7 @@ function ladderOf(id, price) {
 // a time are bought either way, as their own reagents or straight off the AH, whichever the AH can
 // actually supply and then whichever costs less: cheap Light Leather crafted up into Thick Leather
 // is no use when the path needs 60,000 of it.
-function makeBulkBuyer(resolve) {
+function makeBulkBuyer(resolve, o) {
   let bought = new Map(), short = new Map();
   const shortSum = () => [...short.values()].reduce((a, b) => a + b, 0);
   function fromAH(id, n, price) {
@@ -606,7 +643,7 @@ function makeBulkBuyer(resolve) {
     const b = resolve(id);
     if (!b || n <= 0) return 0;
     if (b.src === "Vendor") return b.price * n;
-    if (b.src !== "Craft") return fromAH(id, n, b.price);
+    if (b.src !== "Craft") return fromAH(id, n, ahPrice(id, o) ?? b.price);
     const r = b.recipe;
     const craft = attempt(() => r.reagents.reduce((a, [rid, per]) => a + take(rid, (per * n) / r.creates[1]), 0));
     const p = realm()?.prices[id];
@@ -616,13 +653,22 @@ function makeBulkBuyer(resolve) {
     [bought, short] = pick.books;
     return pick.cost;
   }
-  return { take, get short() { return short; } };
+  // what the shortfalls would cost at the scarcity price, so paths that need them rank lower
+  function penalty() {
+    let sum = 0;
+    for (const [id, n] of short) {
+      const steps = ladderOf(id, ahPrice(id, o) ?? 0);
+      sum += n * (steps.length ? steps[steps.length - 2] : 0) * (SCARCE_PENALTY - 1);
+    }
+    return sum;
+  }
+  return { take, penalty, get short() { return short; }, get bought() { return bought; } };
 }
 
 // Goes through the steps in order with a stock of what you've crafted: later steps use it before
 // buying, and whatever is left at the end is vendored, disenchanted or sold.
 function walkPath(steps, o, mode, resolve) {
-  const stock = new Map(), madeBy = new Map(), bulk = makeBulkBuyer(resolve);
+  const stock = new Map(), madeBy = new Map(), bulk = makeBulkBuyer(resolve, o);
   let buy = 0, crafts = 0;
   const fees = new Map();
   for (const st of steps) {
@@ -658,7 +704,8 @@ function walkPath(steps, o, mode, resolve) {
     }
   }
   const feeSum = [...fees.values()].reduce((a, b) => a + b, 0);
-  return { steps, buy, back, crafts, fees: feeSum, net: buy + feeSum - back, short: bulk.short };
+  const net = buy + feeSum - back;
+  return { steps, buy, back, crafts, fees: feeSum, net, score: net + bulk.penalty(), short: bulk.short, bought: bulk.bought };
 }
 
 function renderLevel() {
@@ -708,7 +755,7 @@ function renderLevel() {
         <span style="color:${qc}">${esc(r.name)}</span></span>
         ${notes.length ? `<span class="step-note">${notes.join(" · ")}</span>` : ""}</span>
       <span class="num mono">×${st.n}</span>
-      <span class="num">${money(st.c.cost.total)}</span>
+      <span class="num">${money(recipeCost(r, plan.resolve).total)}</span>
       <span class="num">${money(st.buy)}</span></div>`;
   }).join("");
   const gaps = plan.steps.some((st) => !st.c);
@@ -725,7 +772,9 @@ function renderLevel() {
       or priced over ${AH_MAX_MARKUP}× what they cost to make, only count what a vendor pays. These are listings, not sales,
       and a long path can flood the AH, so check On AH and Sold/day in the recipe list first.</div>` : ""}
     ${plan.short.size ? `<div class="level-intro"><span class="stale-text">Not enough on the AH:</span> ${[...plan.short].map(([id, n]) =>
-      `${name(id)} (${fmtN(n)} more than listed)`).join(", ")}. Those are priced at the most expensive listing.</div>` : ""}
+      `${name(id)} (${fmtN(n)} more than listed)`).join(", ")}. The path already avoids these where another
+      recipe will do; what's left is priced at the most expensive listing, so the totals are an estimate
+      until more get posted.</div>` : ""}
     ${gaps ? `<div class="stale-text">${realm() ? "Some skill ranges have no recipe with a full price in this scan." : "There's no scan yet, so only recipes made from vendor reagents have a price."}</div>` : ""}
     <div class="step head"><span>Skill</span><span>Craft</span><span class="num">Times</span><span class="num">Each</span><span class="num">To buy</span></div>
     ${rows}`;

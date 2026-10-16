@@ -209,7 +209,7 @@ a:hover { text-decoration: underline; }
 .card-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-profit { font-size: 30px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
 .card-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
-.card-foot [data-m] { color: var(--pos); }
+.card-foot [data-m] { color: var(--text); }
 .sheen {
   position: absolute; top: 0; bottom: 0; left: 0; width: 40%;
   background: linear-gradient(90deg, transparent, var(--pos-bg), transparent);
@@ -243,7 +243,7 @@ a:hover { text-decoration: underline; }
 .row.in-a { animation: rowInA .35s var(--ease) both; }
 .row.in-b { animation: rowInB .35s var(--ease) both; }
 
-.p-pos { color: var(--pos); font-size: 16px; font-weight: 600; }
+.p-pos { color: var(--text); font-size: 16px; font-weight: 600; }
 .p-neg { color: var(--neg); font-size: 14px; font-weight: 400; }
 .recipe { display: flex; align-items: center; gap: 10px; min-width: 0; container-type: inline-size; }
 /* not enough room for both: keep the name whole and drop the profession note */
@@ -366,7 +366,7 @@ a:hover { text-decoration: underline; }
 .tip-line { display: flex; justify-content: space-between; gap: 12px; }
 .tip-line > span:first-child { color: var(--muted); }
 .tip-profit { font-weight: 600; font-size: 14px; }
-.tip-profit.pos > span { color: var(--pos); }
+.tip-profit.pos > span { color: var(--text); }
 .tip-profit.neg > span { color: var(--neg); }
 .tip-reagent { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
 .tip-rname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -9,6 +9,8 @@
   --muted: #8a8a8a;
   --accent: #ffffff;
   --ring: rgb(255 255 255 / 0.12);
+  --glow-a: rgb(62 207 142 / 0.16);
+  --glow-b: rgb(56 189 248 / 0.10);
   --gold: oklch(0.82 0.13 85);
   --silver: #b9bdc6;
   --copper: oklch(0.72 0.11 50);
@@ -40,6 +42,8 @@
   --muted: #6b6b6b;
   --accent: #0a0a0a;
   --ring: rgb(0 0 0 / 0.08);
+  --glow-a: rgb(22 163 74 / 0.12);
+  --glow-b: rgb(14 165 233 / 0.08);
   --gold: oklch(0.6 0.13 75);
   --silver: #6f747c;
   --copper: oklch(0.55 0.11 50);
@@ -177,7 +181,13 @@ a:hover { text-decoration: underline; }
 
 /* ------------------------------------------------------------- top earners */
 
-.main { display: flex; flex-direction: column; min-width: 0; }
+.main {
+  display: flex; flex-direction: column; min-width: 0;
+  /* profit glow: a faint green and teal haze in the top corners, fixed in size so a long table doesn't stretch it */
+  background:
+    radial-gradient(circle 560px at 6% -140px, var(--glow-a), transparent 70%) no-repeat,
+    radial-gradient(circle 480px at 96% -120px, var(--glow-b), transparent 70%) no-repeat;
+}
 .top { padding: 24px 24px 8px; display: flex; flex-direction: column; gap: 14px; }
 .top-title { margin: 0; font-size: 18px; font-weight: 400; }
 .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

@@ -327,7 +327,9 @@ function renderScan() {
   const realms = Object.entries(p.realms || {}).sort((a, b) => b[1].time - a[1].time);
   if (!realms.length) {
     state.realmKey = null;
-    box.innerHTML = `<div class="scan-head"><span class="dot off"></span>No scan found yet</div>
+    // visitors of the hosted site can't scan for it, so they only get the status
+    box.innerHTML = HOSTED ? `<div class="scan-head"><span class="dot off"></span>No scans yet</div>`
+      : `<div class="scan-head"><span class="dot off"></span>No scan found yet</div>
       <span class="muted">In game, open the Auction House, click <b>ChudsForever Scan</b>, then <b>Save</b> or <code>/reload</code>.</span>`;
     return;
   }

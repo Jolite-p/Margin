@@ -966,7 +966,7 @@ function renderTheme() {
 // locally start.bat serves them live from SavedVariables.
 const HOSTED = !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
 const DATA = HOSTED
-  ? { prices: () => `data/prices.json?t=${Date.now()}`, history: () => `data/history.json?t=${Date.now()}`, recipes: "data/recipes.json" }
+  ? { prices: () => `data/prices.json?t=${Date.now()}`, history: () => `data/history.json?t=${Date.now()}`, recipes: "data/recipes.json?v=ddb51347f7" }
   : { prices: () => "/api/prices", history: () => "/api/history", recipes: "/api/recipes" };
 
 async function loadPrices() {

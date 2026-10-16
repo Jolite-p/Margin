@@ -50,6 +50,14 @@ const opts = () => ({
   q: $("search").value.trim().toLowerCase(),
 });
 const isFew = (x) => x.qty > 0 && x.qty < FEW && !x.viaVendor;
+// Sold on the AH with fewer than MIN_LISTED auctions up: one listing isn't a price, so these
+// recipes are left out of the list and the top cards (auctions, or units for older scans).
+const MIN_LISTED = 2;
+function tooThin(x) {
+  if (x.viaVendor || x.sell == null || !x.r.creates) return false;
+  const p = realm()?.prices[x.r.creates[0]];
+  return !!p && (p[3] ?? p[2]) < MIN_LISTED;
+}
 
 // Wowhead source 6 = trainer. Recipes it lists only as drop/vendor/quest are "not trainer";
 // many WoW Forever recipes have no source at all, and those count as learnable.
@@ -203,7 +211,7 @@ const SORT = {
 
 function render() {
   const o = opts();
-  const all = evaluateAll(o);
+  const all = evaluateAll(o).filter((x) => !tooThin(x) || state.favs.has(x.r.id));
   renderCards(all.filter((x) => x.profit != null));
 
   // without a scan nothing has a price, so list every recipe rather than an empty table
@@ -286,12 +294,9 @@ function render() {
   renderView();
 }
 
-// Top 3 positive-profit recipes, ignoring sidebar filters. AH prices only count with at least
-// CARD_MIN_AUCTIONS up and not wildly above the crafting cost.
+// Top 3 positive-profit recipes, ignoring sidebar filters.
 function renderCards(all) {
-  const trusted = (x) => x.viaVendor ||
-    ahTrusted(x.r.creates[0], (x.sell - x.fee) / x.r.creates[1], x.cost.total / x.r.creates[1], CARD_MIN_AUCTIONS);
-  const top = all.filter((x) => x.profit > 0 && trusted(x)).sort((a, b) => b.profit - a.profit).slice(0, 3);
+  const top = all.filter((x) => x.profit > 0 && !tooThin(x)).sort((a, b) => b.profit - a.profit).slice(0, 3);
   const key = top.map((x) => x.r.id).join(",") + "|" + state.realmKey;
   const box = $("cards");
   if (!top.length) {
@@ -484,10 +489,10 @@ const RESULT_MODES = { vendor: "Vendor them", de: "Disenchant them", ah: "Sell t
 // On the AH, a result only counts at its AH price when there's a real market for it: at least
 // AH_MIN_AUCTIONS listed (units, for scans from before the addon counted auctions), and a price
 // no more than AH_MAX_MARKUP times what it costs to make, since more is usually one odd listing.
-const AH_MIN_AUCTIONS = 4, AH_MAX_MARKUP = 10, CARD_MIN_AUCTIONS = 2;
-function ahTrusted(id, value, unitCost, minAuctions = AH_MIN_AUCTIONS) {
+const AH_MIN_AUCTIONS = 4, AH_MAX_MARKUP = 10;
+function ahTrusted(id, value, unitCost) {
   const p = realm()?.prices[id];
-  if (!p || (p[3] ?? p[2]) < minAuctions) return false;
+  if (!p || (p[3] ?? p[2]) < AH_MIN_AUCTIONS) return false;
   return !(unitCost > 0 && value > unitCost * AH_MAX_MARKUP);
 }
 

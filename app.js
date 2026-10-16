@@ -286,9 +286,12 @@ function render() {
   renderView();
 }
 
-// Top 3 positive-profit recipes, ignoring sidebar filters.
+// Top 3 positive-profit recipes, ignoring sidebar filters. AH prices only count with at least
+// CARD_MIN_AUCTIONS up and not wildly above the crafting cost.
 function renderCards(all) {
-  const top = all.filter((x) => x.profit > 0).sort((a, b) => b.profit - a.profit).slice(0, 3);
+  const trusted = (x) => x.viaVendor ||
+    ahTrusted(x.r.creates[0], (x.sell - x.fee) / x.r.creates[1], x.cost.total / x.r.creates[1], CARD_MIN_AUCTIONS);
+  const top = all.filter((x) => x.profit > 0 && trusted(x)).sort((a, b) => b.profit - a.profit).slice(0, 3);
   const key = top.map((x) => x.r.id).join(",") + "|" + state.realmKey;
   const box = $("cards");
   if (!top.length) {
@@ -481,10 +484,10 @@ const RESULT_MODES = { vendor: "Vendor them", de: "Disenchant them", ah: "Sell t
 // On the AH, a result only counts at its AH price when there's a real market for it: at least
 // AH_MIN_AUCTIONS listed (units, for scans from before the addon counted auctions), and a price
 // no more than AH_MAX_MARKUP times what it costs to make, since more is usually one odd listing.
-const AH_MIN_AUCTIONS = 4, AH_MAX_MARKUP = 10;
-function ahTrusted(id, value, unitCost) {
+const AH_MIN_AUCTIONS = 4, AH_MAX_MARKUP = 10, CARD_MIN_AUCTIONS = 2;
+function ahTrusted(id, value, unitCost, minAuctions = AH_MIN_AUCTIONS) {
   const p = realm()?.prices[id];
-  if (!p || (p[3] ?? p[2]) < AH_MIN_AUCTIONS) return false;
+  if (!p || (p[3] ?? p[2]) < minAuctions) return false;
   return !(unitCost > 0 && value > unitCost * AH_MAX_MARKUP);
 }
 

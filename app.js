@@ -478,12 +478,22 @@ function deMats(id) {
 // What one unit of a leftover result is worth: vendored, disenchanted or sold on the AH.
 // Disenchanting or the AH never count for less than the vendor price, which is always there.
 const RESULT_MODES = { vendor: "Vendor them", de: "Disenchant them", ah: "Sell them on the AH" };
-function resultValue(id, o, mode) {
+// On the AH, a result only counts at its AH price when there's a real market for it: at least
+// AH_MIN_AUCTIONS listed (units, for scans from before the addon counted auctions), and a price
+// no more than AH_MAX_MARKUP times what it costs to make, since more is usually one odd listing.
+const AH_MIN_AUCTIONS = 4, AH_MAX_MARKUP = 10;
+function ahTrusted(id, value, unitCost) {
+  const p = realm()?.prices[id];
+  if (!p || (p[3] ?? p[2]) < AH_MIN_AUCTIONS) return false;
+  return !(unitCost > 0 && value > unitCost * AH_MAX_MARKUP);
+}
+
+function resultValue(id, o, mode, unitCost = 0) {
   const vend = state.items[id]?.sell || 0;
   const net = (v) => v * (1 - o.cut / 100);
   if (mode === "ah") {
     const p = ahPrice(id, o);
-    return Math.max(vend, p != null ? net(p) : 0);
+    return p != null && ahTrusted(id, net(p), unitCost) ? Math.max(vend, net(p)) : vend;
   }
   if (mode === "de") {
     const mats = deMats(id);
@@ -497,12 +507,14 @@ function resultValue(id, o, mode) {
 // later step needs as a reagent is worth what it would otherwise cost to get. Which results are
 // needed depends on the path, so it's worked out a few times, each time with what the one before
 // needed, and the cheapest one wins (the first never counts on reuse, so it can only get better).
+const MIN_CHANCE = 0.1;
 function levelPath(prof, from, to, o, mode) {
   const resolve = makeBuyResolver(o);
   const cands = state.recipes.filter((r) => r.profession === prof && r.colors && (!o.trainerOnly || isTrainer(r)))
     .map((r) => {
       const pid = r.creates?.[0];
-      return { r, pid, yieldN: r.creates?.[1] || 0, cost: recipeCost(r, resolve), value: pid ? resultValue(pid, o, mode) : 0 };
+      const yieldN = r.creates?.[1] || 0, cost = recipeCost(r, resolve);
+      return { r, pid, yieldN, cost, value: pid ? resultValue(pid, o, mode, cost.total / yieldN) : 0 };
     })
     .filter((c) => c.cost.complete);
 
@@ -510,7 +522,10 @@ function levelPath(prof, from, to, o, mode) {
   for (let pass = 0; pass < 6; pass++) {
     const made = new Map(), steps = [];
     for (let s = from; s < to; s++) {
-      let best = null, bestPer = Infinity;
+      // When results can be worth more than they cost (disenchanting, the AH), a recipe that rarely
+      // gives a point looks great per point because it's mostly crafted for profit; skip those below
+      // MIN_CHANCE unless nothing else is left.
+      let best = null, bestPer = Infinity, low = null, lowPer = Infinity;
       for (const c of cands) {
         if ((c.r.skill ?? 0) > s) continue;
         const p = skillChance(c.r, s);
@@ -518,8 +533,10 @@ function levelPath(prof, from, to, o, mode) {
         let unit = c.value;
         if (c.pid && (demand.get(c.pid) || 0) > (made.get(c.pid) || 0)) unit = Math.max(unit, resolve(c.pid)?.price ?? 0);
         const per = (c.cost.total - unit * c.yieldN) / p;
-        if (per < bestPer) { best = c; bestPer = per; }
+        if (mode !== "vendor" && p < MIN_CHANCE) { if (per < lowPer) { low = c; lowPer = per; } }
+        else if (per < bestPer) { best = c; bestPer = per; }
       }
+      best ??= low;
       const crafts = best ? 1 / skillChance(best.r, s) : 0;
       if (best?.pid) made.set(best.pid, (made.get(best.pid) || 0) + crafts * best.yieldN);
       const last = steps[steps.length - 1];
@@ -550,20 +567,16 @@ function ladderOf(id, price) {
 }
 
 // Buys in bulk: each call costs the next n units, carrying on up the AH listings from where earlier
-// calls stopped. A unit never costs more than the vendor sells it for, crafted reagents are bought
-// as their own reagents, and units beyond what the AH has are priced at its last step and counted
-// in short.
+// calls stopped. A unit never costs more than the vendor sells it for, and units beyond what the AH
+// has are priced at its last step and counted in short. Reagents that are cheaper to craft one at
+// a time are bought either way, as their own reagents or straight off the AH, whichever the AH can
+// actually supply and then whichever costs less: cheap Light Leather crafted up into Thick Leather
+// is no use when the path needs 60,000 of it.
 function makeBulkBuyer(resolve) {
-  const bought = new Map(), short = new Map();
-  function take(id, n) {
-    const b = resolve(id);
-    if (!b || n <= 0) return 0;
-    if (b.src === "Craft") {
-      const r = b.recipe;
-      return r.reagents.reduce((a, [rid, per]) => a + take(rid, (per * n) / r.creates[1]), 0);
-    }
-    if (b.src === "Vendor") return b.price * n;
-    const steps = ladderOf(id, b.price), cap = vendorPrice(id) ?? Infinity;
+  let bought = new Map(), short = new Map();
+  const shortSum = () => [...short.values()].reduce((a, b) => a + b, 0);
+  function fromAH(id, n, price) {
+    const steps = ladderOf(id, price), cap = vendorPrice(id) ?? Infinity;
     let skip = bought.get(id) || 0, left = n, cost = 0;
     bought.set(id, skip + n);
     for (let i = 0; i < steps.length && left > 0; i += 2) {
@@ -573,13 +586,37 @@ function makeBulkBuyer(resolve) {
       const t = Math.min(c, left);
       cost += t * Math.min(steps[i], cap); left -= t;
     }
-    if (left > 0) {
+    if (left > 0 && cap < Infinity) cost += left * cap;   // the vendor has the rest
+    else if (left > 0) {
       short.set(id, (short.get(id) || 0) + left);
-      cost += left * Math.min(steps.length ? steps[steps.length - 2] : b.price, cap);
+      cost += left * (steps.length ? steps[steps.length - 2] : price);
     }
     return cost;
   }
-  return { take, short };
+  // runs one way of buying on a copy of the books, to compare before committing to it
+  function attempt(fn) {
+    const saved = [bought, short];
+    bought = new Map(bought); short = new Map(short);
+    const before = shortSum(), cost = fn();
+    const out = { cost, short: shortSum() - before, books: [bought, short] };
+    [bought, short] = saved;
+    return out;
+  }
+  function take(id, n) {
+    const b = resolve(id);
+    if (!b || n <= 0) return 0;
+    if (b.src === "Vendor") return b.price * n;
+    if (b.src !== "Craft") return fromAH(id, n, b.price);
+    const r = b.recipe;
+    const craft = attempt(() => r.reagents.reduce((a, [rid, per]) => a + take(rid, (per * n) / r.creates[1]), 0));
+    const p = realm()?.prices[id];
+    const ah = p ? attempt(() => fromAH(id, n, p[1])) : null;
+    // if the AH can't cover it either way, show the shortfall in the item itself, not its raw materials
+    const pick = !ah ? craft : craft.short > 0 ? ah : ah.short > 0 ? craft : ah.cost < craft.cost ? ah : craft;
+    [bought, short] = pick.books;
+    return pick.cost;
+  }
+  return { take, get short() { return short; } };
 }
 
 // Goes through the steps in order with a stock of what you've crafted: later steps use it before
@@ -613,7 +650,8 @@ function walkPath(steps, o, mode, resolve) {
   let back = 0;
   for (const [id, list] of madeBy) {
     let left = stock.get(id) || 0;
-    back += left * resultValue(id, o, mode);
+    const c = list[0].c;
+    back += left * resultValue(id, o, mode, c.cost.total / c.yieldN);
     for (const st of [...list].reverse()) {   // the last crafts are the ones left over
       const spare = Math.min(left, st.made);
       st.leftover = spare; st.used = st.made - spare; left -= spare;
@@ -683,7 +721,9 @@ function renderLevel() {
       ${stat(backLabel, money(plan.back))}
       ${stat(plan.net < 0 ? "Net profit" : "Net cost", money(Math.abs(plan.net)), " stat-main", `<span class="stat-sub">${plan.crafts.toLocaleString("en-US")} crafts</span>`)}
     </div>
-    ${mode === "ah" ? `<div class="level-intro">Counts every leftover as sold at the scan price, which a busy path can flood the AH with. Check On AH and Sold/day in the recipe list first.</div>` : ""}
+    ${mode === "ah" ? `<div class="level-intro">Counts leftovers as sold at the scan price, after the AH cut. Items with fewer than ${AH_MIN_AUCTIONS} auctions up,
+      or priced over ${AH_MAX_MARKUP}× what they cost to make, only count what a vendor pays. These are listings, not sales,
+      and a long path can flood the AH, so check On AH and Sold/day in the recipe list first.</div>` : ""}
     ${plan.short.size ? `<div class="level-intro"><span class="stale-text">Not enough on the AH:</span> ${[...plan.short].map(([id, n]) =>
       `${name(id)} (${fmtN(n)} more than listed)`).join(", ")}. Those are priced at the most expensive listing.</div>` : ""}
     ${gaps ? `<div class="stale-text">${realm() ? "Some skill ranges have no recipe with a full price in this scan." : "There's no scan yet, so only recipes made from vendor reagents have a price."}</div>` : ""}

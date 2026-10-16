@@ -23,7 +23,7 @@ function save(key, value) {
 }
 
 const state = {
-  recipes: [], items: {}, byProduct: {}, profCounts: {},
+  recipes: [], items: {}, byProduct: {}, profCounts: {}, ranks: {},
   prices: null, realmKey: null, pricesMtime: -1, history: null,
   profession: null,
   make: new Map(),           // recipe id -> how many to craft, for the shopping list
@@ -121,11 +121,12 @@ function ahPrice(id, o) {
   return o.basis === "min" ? p[0] : p[1];
 }
 
+// Vendor prices are Wowhead's base prices, with the Bartering talent and reputation discounts taken off.
+const BARTER = 0.1;
+const vendorFactor = () => (1 - ($("barter").checked ? BARTER : 0)) * (1 - Number($("repDiscount").value) / 100);
 function vendorPrice(id) {
-  const v = state.prices?.vendor?.[id];
-  if (v) return v;
   const it = state.items[id];
-  return it && it.vendor && it.buy ? it.buy : null;
+  return it && it.vendor && it.buy ? Math.round(it.buy * vendorFactor()) : null;
 }
 
 // Cheapest way to obtain one unit of an item: AH, vendor, or (optionally) crafting it.
@@ -291,7 +292,7 @@ function render() {
     b.classList.toggle("on", on);
     b.textContent = b.textContent.replace(/ [↓↑]$/, "") + (on ? (state.sort.dir < 0 ? " ↓" : " ↑") : "");
   });
-  renderView();
+  renderView(all);
 }
 
 // Top 3 positive-profit recipes, ignoring sidebar filters.
@@ -540,6 +541,12 @@ function levelPath(prof, from, to, o, mode) {
     if (!changed) break;
   }
   best.resolve = real;
+  // the trainer ranks the range needs: Apprentice to start, then one each time it passes a cap
+  const ranks = state.ranks[prof] || [];
+  best.rankUps = ranks.filter((k, i) => (i === 0 ? from <= 1 : from <= ranks[i - 1].cap && to > ranks[i - 1].cap))
+    .map((k) => ({ ...k, at: ranks[ranks.indexOf(k) - 1]?.cap ?? from }));
+  const rankFees = best.rankUps.reduce((a, k) => a + k.cost, 0);
+  best.fees += rankFees; best.net += rankFees;
   return best;
 }
 
@@ -556,6 +563,7 @@ function scarcePrice(id, n, short, o) {
 }
 
 function* reusePasses(prof, from, to, o, mode, resolve, real) {
+  const caps = new Set((state.ranks[prof] || []).map((k) => k.cap));   // a new step starts after each
   const cands = state.recipes.filter((r) => r.profession === prof && r.colors && (!o.trainerOnly || isTrainer(r)))
     .map((r) => {
       const pid = r.creates?.[0];
@@ -587,7 +595,7 @@ function* reusePasses(prof, from, to, o, mode, resolve, real) {
       const crafts = best ? 1 / skillChance(best.r, s) : 0;
       if (best?.pid) made.set(best.pid, (made.get(best.pid) || 0) + crafts * best.yieldN);
       const last = steps[steps.length - 1];
-      if (last && last.c === best) { last.to = s + 1; last.crafts += crafts; }
+      if (last && last.c === best && !caps.has(s)) { last.to = s + 1; last.crafts += crafts; }
       else steps.push({ from: s, to: s + 1, c: best, crafts });
     }
     const next = new Map();
@@ -724,7 +732,7 @@ function renderLevel() {
       Yellow and green recipes count the extra crafts you need when a skill-up doesn't happen. Materials are bought
       through the AH listings cheapest first, so buying a lot costs what it really would. What you craft is
       used by later steps when they need it; the rest is handled the way you pick below.
-      Uses your filters (trainer recipes only, craft reagents, pricing). Trainer rank-ups aren't included.</div>
+      Uses your filters (trainer recipes only, craft reagents, pricing). Shows when to train each rank, and its fee is in Trainer fees.</div>
       <div class="level-controls">
         <label class="cut">Skill <input id="lvFrom" class="cut-input skill-input" type="text" inputmode="numeric" aria-label="From skill"></label>
         <label class="cut">to <input id="lvTo" class="cut-input skill-input" type="text" inputmode="numeric" aria-label="To skill"></label>
@@ -735,7 +743,9 @@ function renderLevel() {
       </div>
       <div id="levelBody"></div>`;
   }
-  const max = Math.max(...state.recipes.filter((r) => r.profession === prof && r.colors).map((r) => r.colors[3]));
+  const ranks = state.ranks[prof] || [];
+  const max = ranks.length ? ranks[ranks.length - 1].cap
+    : Math.max(...state.recipes.filter((r) => r.profession === prof && r.colors).map((r) => r.colors[3]));
   if (box.dataset.prof !== prof) {
     box.dataset.prof = prof;
     $("lvFrom").value = 1;
@@ -749,7 +759,15 @@ function renderLevel() {
   if (!plan) { $("levelBody").innerHTML = `<div class="level-intro">Pick a skill range above.</div>`; return; }
 
   const name = (id) => esc(state.items[id]?.name || "Item " + id);
+  const rankRow = (k) => `<div class="step rank"><span class="mono">${k.at}</span>
+    <span>${{ trainer: "Train", book: "Learn", quest: "Get" }[k.how || "trainer"]} <b>${k.rank}</b>${k.how === "book" ? " from a book"
+      : k.how === "quest" ? " from its quest" : ""}${k.rank === "Apprentice" ? "" : ` (from skill ${k.skill}) to go past ${k.at}`}</span>
+    <span></span><span></span><span class="num">${money(k.cost)}</span></div>`;
   const rows = plan.steps.map((st) => {
+    const ranksHere = plan.rankUps.filter((k) => k.at === st.from).map(rankRow).join("");
+    return ranksHere + stepRow(st);
+  }).join("");
+  function stepRow(st) {
     const range = `<span class="mono">${st.from}–${st.to}</span>`;
     if (!st.c) return `<div class="step gap">${range}<span>No priced recipe gives skill-ups here</span><span></span><span></span><span></span></div>`;
     const r = st.c.r;
@@ -765,7 +783,7 @@ function renderLevel() {
       <span class="num mono">×${st.n}</span>
       <span class="num">${money(recipeCost(r, plan.resolve).total)}</span>
       <span class="num">${money(st.buy)}</span></div>`;
-  }).join("");
+  }
   const gaps = plan.steps.some((st) => !st.c);
   const backLabel = { vendor: "Vendored back", de: "Disenchanted back", ah: "Sold on the AH" }[mode];
   const stat = (label, value, cls = "", sub = "") => `<div class="stat${cls}"><span class="stat-label">${label}</span><span class="stat-value">${value}</span>${sub}</div>`;
@@ -803,18 +821,58 @@ function levelShoppingText() {
     `Total: ${plainMoney(state.levelPlan?.buy || 0)}`].join("\n");
 }
 
-function renderView() {
+function renderView(all) {
   const canLevel = state.profession && state.profession !== FAV;
-  if (!canLevel) state.view = "recipes";
-  $("viewTabs").hidden = !canLevel;
+  if (!canLevel && state.view === "level") state.view = "recipes";
   document.querySelectorAll("#viewTabs button").forEach((b) => {
     const on = b.dataset.view === state.view;
+    b.hidden = b.dataset.view === "level" && !canLevel;
     b.classList.toggle("on", on);
     b.setAttribute("aria-selected", on);
   });
+  $("viewTabs").hidden = false;
   $("level").hidden = state.view !== "level";
-  $("table").hidden = state.view === "level";
+  $("cooldowns").hidden = state.view !== "cooldowns";
+  $("table").hidden = state.view !== "recipes";
   if (state.view === "level") renderLevel();
+  if (state.view === "cooldowns") renderCooldowns(all);
+}
+
+// ---------------------------------------------------------------- cooldowns
+
+const fmtCooldown = (h) => {
+  const [n, unit] = h >= 22 ? [Math.round((h / 24) * 10) / 10, "day"] : [Math.round(h), "hour"];
+  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+};
+
+// Recipes you can only craft every so often, by what they make per day if crafted every time the
+// cooldown is up. In classic, Alchemy's transmutes share one cooldown, so the best one is marked.
+function renderCooldowns(all) {
+  const rows = all.filter((x) => x.r.cooldown && (!state.profession || state.profession === FAV || x.r.profession === state.profession))
+    .map((x) => ({ x, perDay: x.profit == null ? null : (x.profit * 24) / x.r.cooldown }))
+    .sort((a, b) => (b.perDay ?? -Infinity) - (a.perDay ?? -Infinity));
+  if (!rows.length) {
+    $("cooldowns").innerHTML = `<div class="level-intro">No recipes with a cooldown${state.profession && state.profession !== FAV ? " in " + esc(state.profession) : ""}.</div>`;
+    return;
+  }
+  const best = new Map();   // profession -> its best transmute, the one worth the shared cooldown
+  for (const { x } of rows) if (/^Transmute/.test(x.r.name) && x.profit != null && !best.has(x.r.profession)) best.set(x.r.profession, x.r.id);
+  $("cooldowns").innerHTML = `<div class="level-intro">Recipes with a cooldown, ranked by profit per day if you craft them every time
+      the cooldown is up, using the same pricing as the recipe list. In classic, transmutes share one cooldown, so the best one
+      is marked; Wowhead doesn't say whether that still holds for Forever's 1-hour transmutes.</div>
+    <div class="step head cd"><span>Cooldown</span><span>Craft</span><span class="num">On AH</span><span class="num">Profit each</span><span class="num">Per day</span></div>
+    ${rows.map(({ x, perDay }) => {
+      const r = x.r, it = r.creates ? state.items[r.creates[0]] : null, qc = qColor(it ? it.quality : 1);
+      const pm = (v) => (v == null ? `<span class="muted">—</span>` : `<span class="${v >= 0 ? "p-pos" : "p-neg"}">${money(v)}</span>`);
+      const shared = /^Transmute/.test(r.name) ? (best.get(r.profession) === r.id ? " · best transmute" : " · shares the transmute cooldown") : "";
+      return `<div class="step cd"><span class="mono">${fmtCooldown(r.cooldown)}</span>
+        <span class="step-craft"><span class="recipe-name"><a class="icon-link" href="${WH}/spell=${r.id}" target="_blank" rel="noopener" data-tip="recipe:${r.id}"><img class="row-icon" src="${ICON(it?.icon || r.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
+          <span style="color:${qc}">${esc(r.name)}</span></span>
+          <span class="step-note">${esc(r.profession)} · ${r.skill ?? "?"}${shared}</span></span>
+        <span class="num mono">${x.qty ?? ""}</span>
+        <span class="num">${pm(x.profit)}</span>
+        <span class="num">${pm(perDay)}</span></div>`;
+    }).join("")}`;
 }
 
 function renderProfs() {
@@ -868,7 +926,7 @@ function readURL() {
   const u = new URLSearchParams(location.search);
   const prof = u.get("prof");
   if (prof) state.profession = prof === "favorites" ? FAV : Object.keys(state.profCounts).find((p) => slug(p) === slug(prof)) || null;
-  if (u.get("view") === "level") state.view = "level";
+  if (["level", "cooldowns"].includes(u.get("view"))) state.view = u.get("view");
   if (RESULT_MODES[u.get("results")]) state.levelMode = u.get("results");
   if (DEPOSIT_RATE[u.get("deposit")]) { $("deposit").checked = true; $("duration").value = u.get("deposit"); $("duration").hidden = false; }
   if (u.get("q")) $("search").value = u.get("q");
@@ -884,6 +942,7 @@ function writeURL() {
   const u = new URLSearchParams();
   if (state.profession) u.set("prof", state.profession === FAV ? "favorites" : slug(state.profession));
   if (state.view === "level" && state.profession && state.profession !== FAV) u.set("view", "level");
+  if (state.view === "cooldowns") u.set("view", "cooldowns");
   if (state.levelMode !== "vendor") u.set("results", state.levelMode);
   if ($("deposit").checked) u.set("deposit", $("duration").value);
   const q = $("search").value.trim();
@@ -934,10 +993,14 @@ async function init() {
   if (data.error) { state.prices = { error: data.error }; renderScan(); return; }
   state.recipes = data.recipes;
   state.items = data.items;
+  state.ranks = data.ranks || {};
   for (const r of state.recipes) {
     state.profCounts[r.profession] = (state.profCounts[r.profession] || 0) + 1;
     if (r.creates) (state.byProduct[r.creates[0]] ||= []).push(r);
   }
+  const disc = loadSaved("cf-discounts", {});
+  $("barter").checked = !!disc.barter;
+  if (disc.rep) $("repDiscount").value = disc.rep;
   readURL();
   renderProfs();
   await loadPrices();
@@ -1125,6 +1188,10 @@ $("rows").addEventListener("input", (e) => {
 $("hideFew").addEventListener("change", refilter);
 $("trainerOnly").addEventListener("change", refilter);
 $("deposit").addEventListener("change", () => { $("duration").hidden = !$("deposit").checked; render(); });
+for (const id of ["barter", "repDiscount"]) $(id).addEventListener("change", () => {
+  save("cf-discounts", { barter: $("barter").checked, rep: $("repDiscount").value });
+  render();
+});
 $("duration").addEventListener("change", render);
 $("viewTabs").addEventListener("click", (e) => {
   const b = e.target.closest("[data-view]");

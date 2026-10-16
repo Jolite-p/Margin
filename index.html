@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Azeret+Mono:wght@400;500;600&display=swap">
   <link rel="icon" type="image/png" href="favicon.png?v=79615db9a3">
   <link rel="icon" href="favicon.ico?v=212200aaed" sizes="16x16 32x32 48x48">
-  <link rel="stylesheet" href="style.css?v=b3906bcdb9">
+  <link rel="stylesheet" href="style.css?v=d0174b4ae5">
 </head>
 <body>
   <div class="app">
@@ -51,6 +51,17 @@
           </select>
         </div>
         <label class="check"><input id="craftMats" type="checkbox" checked>Craft reagents when cheaper</label>
+        <label class="check" title="The Bartering legacy talent: 10% off what vendors charge"><input id="barter" type="checkbox">Bartering (10% off vendors)</label>
+        <label class="row-between" title="Reputation discount with the vendors you buy from">Rep discount
+          <select id="repDiscount" class="select select-sm">
+            <option value="0">None</option>
+            <option value="5">5%</option>
+            <option value="10">10%</option>
+            <option value="15">15%</option>
+            <option value="20">20%</option>
+          </select>
+        </label>
+        <span class="hint">Vendor prices are from Wowhead. Discounts are saved in this browser.</span>
       </div>
 
       <div class="group pricing">
@@ -73,9 +84,11 @@
       <div class="view-tabs" id="viewTabs" role="tablist" hidden>
         <button type="button" role="tab" data-view="recipes">Recipes</button>
         <button type="button" role="tab" data-view="level">Cheapest leveling path</button>
+        <button type="button" role="tab" data-view="cooldowns">Cooldowns</button>
       </div>
 
       <section class="level" id="level" hidden></section>
+      <section class="level" id="cooldowns" hidden></section>
 
       <div class="table" id="table">
         <div class="thead" id="thead">
@@ -93,6 +106,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=108896a7a5"></script>
+  <script src="app.js?v=63b254c938"></script>
 </body>
 </html>

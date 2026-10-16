@@ -99,7 +99,14 @@ a:hover { text-decoration: underline; }
 }
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.brand-cat { width: 48px; height: 48px; flex: none; object-fit: cover; border-radius: 50%; border: 2px solid var(--accent); }
+.brand-mark { position: relative; width: 48px; height: 48px; flex: none; }
+.brand-cat { display: block; width: 48px; height: 48px; object-fit: cover; border-radius: 50%; border: 2px solid var(--accent); }
+/* the ears, drawn over the ring: same scale as the photo inside the 2px border, with room around it */
+.brand-ears {
+  position: absolute; pointer-events: none;
+  width: calc(44px * 1.19355); height: calc(44px * 1.19355);
+  left: calc(2px - 44px * 0.09677); top: calc(2px - 44px * 0.09677);
+}
 .brand-name { font-size: 23px; font-weight: 700; letter-spacing: -0.01em; color: var(--accent); }
 .brand-sub { font-size: 12px; color: var(--muted); }
 

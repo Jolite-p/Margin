@@ -31,6 +31,7 @@ const state = {
   make: new Map(),           // recipe id -> how many to craft, for the shopping list
   favs: new Set(loadSaved("cf-favs", [])),   // starred recipe ids, kept in the visitor's browser
   view: "recipes",           // or "level", the cheapest leveling path for the chosen profession
+  levelMode: "vendor",       // what the leveling path does with leftover results: vendor, de or ah
   sort: { key: "profit", dir: -1 },
   shown: PAGE, open: new Set(),
   cascade: 0,                // bumps when the row cascade should replay
@@ -463,34 +464,133 @@ function skillChance(r, s) {
   return s < yellow ? 1 : (grey - s) / (grey - yellow);
 }
 
-// For each skill point from..to-1, the learnable recipe with the lowest expected cost per point
-// (material cost minus what the result vendors for, divided by the skill-up chance), merged
-// into steps where the same recipe stays cheapest.
-function levelPath(prof, from, to, o) {
+// Classic disenchanting, as expected units per disenchant. Uncommon rows by highest item level:
+// [dust, dust qty, essence, essence qty, shard]; armor gives 75% dust / 20% essence / 5% shard,
+// weapons swap dust and essence.
+const DE_UNCOMMON = [
+  [15, 10940, 1.5, 10938, 1.5, null], [20, 10940, 2.5, 10939, 1.5, 10978], [25, 10940, 5, 10998, 1.5, 10978],
+  [30, 11083, 1.5, 11082, 1.5, 11084], [35, 11083, 3.5, 11134, 1.5, 11138], [40, 11137, 1.5, 11135, 1.5, 11139],
+  [45, 11137, 3.5, 11174, 1.5, 11177], [50, 11176, 1.5, 11175, 1.5, 11178], [55, 11176, 3.5, 16202, 1.5, 14343],
+  [60, 16204, 1.5, 16203, 1.5, 14344], [Infinity, 16204, 3.5, 16203, 2.5, 14344],
+];
+const DE_RARE = [[25, 10978], [30, 11084], [35, 11138], [40, 11139], [45, 11177], [50, 11178], [55, 14343], [Infinity, 14344]];
+const DE_EPIC = [[45, 11177, 3], [50, 11178, 3], [55, 14343, 3], [60, 20725, 1], [Infinity, 20725, 1.5]];
+
+// [[material id, expected units], ...] from disenchanting one item, or null if it can't be.
+function deMats(id) {
+  const it = state.items[id];
+  if (!it?.de || !it.ilvl || it.ilvl < 5 || it.quality < 2) return null;
+  const row = (t) => t.find((x) => it.ilvl <= x[0]);
+  if (it.quality === 2) {
+    const [, dust, dq, ess, eq, shard] = row(DE_UNCOMMON);
+    const [pd, pe] = it.de === "weapon" ? [0.2, 0.75] : [it.ilvl <= 15 ? 0.8 : 0.75, 0.2];
+    return [[dust, pd * dq], [ess, pe * eq], ...(shard ? [[shard, 0.05]] : [])];
+  }
+  if (it.quality === 3) return [[row(DE_RARE)[1], 1]];
+  const [, mat, q] = row(DE_EPIC);
+  return [[mat, q]];
+}
+
+// What one unit of a leftover result is worth: vendored, disenchanted or sold on the AH.
+// Disenchanting or the AH never count for less than the vendor price, which is always there.
+const RESULT_MODES = { vendor: "Vendor them", de: "Disenchant them", ah: "Sell them on the AH" };
+function resultValue(id, o, mode) {
+  const vend = state.items[id]?.sell || 0;
+  const net = (v) => v * (1 - o.cut / 100);
+  if (mode === "ah") {
+    const p = ahPrice(id, o);
+    return Math.max(vend, p != null ? net(p) : 0);
+  }
+  if (mode === "de") {
+    const mats = deMats(id);
+    if (mats) return Math.max(vend, net(mats.reduce((a, [m, q]) => a + (ahPrice(m, o) ?? 0) * q, 0)));
+  }
+  return vend;
+}
+
+// For each skill point from..to-1, the learnable recipe with the lowest expected cost per point:
+// material cost minus what the result is worth, divided by the skill-up chance. A result that a
+// later step needs as a reagent is worth what it would otherwise cost to get. Which results are
+// needed depends on the path, so it's worked out a few times, each time with what the one before
+// needed, and the cheapest one wins (the first never counts on reuse, so it can only get better).
+function levelPath(prof, from, to, o, mode) {
   const resolve = makeBuyResolver(o);
   const cands = state.recipes.filter((r) => r.profession === prof && r.colors && (!o.trainerOnly || isTrainer(r)))
     .map((r) => {
-      const cost = recipeCost(r, resolve);
-      const back = r.creates ? (state.items[r.creates[0]]?.sell || 0) * r.creates[1] : 0;
-      return { r, cost, back, net: cost.total - back };
+      const pid = r.creates?.[0];
+      return { r, pid, yieldN: r.creates?.[1] || 0, cost: recipeCost(r, resolve), value: pid ? resultValue(pid, o, mode) : 0 };
     })
     .filter((c) => c.cost.complete);
-  const steps = [];
-  for (let s = from; s < to; s++) {
-    let best = null, bestPer = Infinity;
-    for (const c of cands) {
-      if ((c.r.skill ?? 0) > s) continue;
-      const p = skillChance(c.r, s);
-      if (p <= 0) continue;
-      const per = c.net / p;
-      if (per < bestPer) { best = c; bestPer = per; }
+
+  let demand = new Map(), best = null;
+  for (let pass = 0; pass < 6; pass++) {
+    const made = new Map(), steps = [];
+    for (let s = from; s < to; s++) {
+      let best = null, bestPer = Infinity;
+      for (const c of cands) {
+        if ((c.r.skill ?? 0) > s) continue;
+        const p = skillChance(c.r, s);
+        if (p <= 0) continue;
+        let unit = c.value;
+        if (c.pid && (demand.get(c.pid) || 0) > (made.get(c.pid) || 0)) unit = Math.max(unit, resolve(c.pid)?.price ?? 0);
+        const per = (c.cost.total - unit * c.yieldN) / p;
+        if (per < bestPer) { best = c; bestPer = per; }
+      }
+      const crafts = best ? 1 / skillChance(best.r, s) : 0;
+      if (best?.pid) made.set(best.pid, (made.get(best.pid) || 0) + crafts * best.yieldN);
+      const last = steps[steps.length - 1];
+      if (last && last.c === best) { last.to = s + 1; last.crafts += crafts; }
+      else steps.push({ from: s, to: s + 1, c: best, crafts });
     }
-    const last = steps[steps.length - 1];
-    const crafts = best ? 1 / skillChance(best.r, s) : 0;
-    if (last && last.c === best) { last.to = s + 1; last.crafts += crafts; }
-    else steps.push({ from: s, to: s + 1, c: best, crafts });
+    const next = new Map();
+    for (const st of steps) {
+      if (st.c) for (const [id, n] of st.c.r.reagents) next.set(id, (next.get(id) || 0) + n * Math.ceil(st.crafts));
+    }
+    const plan = walkPath(steps, o, mode);
+    if (!best || plan.net < best.net) best = plan;
+    const settled = next.size === demand.size && [...next].every(([k, v]) => demand.get(k) === v);
+    demand = next;
+    if (settled) break;
   }
-  return steps;
+  return best;
+}
+
+// Goes through the steps in order with a stock of what you've crafted: later steps use it before
+// buying, and whatever is left at the end is vendored, disenchanted or sold.
+function walkPath(steps, o, mode) {
+  const stock = new Map(), madeBy = new Map();
+  let buy = 0, crafts = 0;
+  const fees = new Map();
+  for (const st of steps) {
+    if (!st.c) continue;
+    const n = st.n = Math.ceil(st.crafts);
+    crafts += n;
+    if (st.c.r.trainingcost) fees.set(st.c.r.id, st.c.r.trainingcost);
+    st.buy = 0; st.fromStock = []; st.toBuy = [];
+    for (const { id, n: per, buy: b } of st.c.cost.parts) {
+      const need = per * n, have = stock.get(id) || 0, use = Math.min(have, need);
+      if (use > 0) { stock.set(id, have - use); st.fromStock.push([id, use]); }
+      if (need - use > 0) { st.toBuy.push([id, need - use, b]); st.buy += (need - use) * b.price; }
+    }
+    buy += st.buy;
+    if (st.c.pid) {
+      st.made = n * st.c.yieldN;
+      stock.set(st.c.pid, (stock.get(st.c.pid) || 0) + st.made);
+      (madeBy.get(st.c.pid) || madeBy.set(st.c.pid, []).get(st.c.pid)).push(st);
+    }
+  }
+  // what each step's results end up as: used by a later step, or left over
+  let back = 0;
+  for (const [id, list] of madeBy) {
+    let left = stock.get(id) || 0;
+    back += left * resultValue(id, o, mode);
+    for (const st of [...list].reverse()) {   // the last crafts are the ones left over
+      const spare = Math.min(left, st.made);
+      st.leftover = spare; st.used = st.made - spare; left -= spare;
+    }
+  }
+  const feeSum = [...fees.values()].reduce((a, b) => a + b, 0);
+  return { steps, buy, back, crafts, fees: feeSum, net: buy + feeSum - back };
 }
 
 function renderLevel() {
@@ -498,11 +598,16 @@ function renderLevel() {
   const box = $("level");
   if (!box.querySelector("#levelBody")) {
     box.innerHTML = `<div class="level-intro">The cheapest recipe to craft at each skill level, using the prices from the scan.
-      Yellow and green recipes count the extra crafts you need when a skill-up doesn't happen.
+      Yellow and green recipes count the extra crafts you need when a skill-up doesn't happen. What you craft is
+      used by later steps when they need it; the rest is handled the way you pick below.
       Uses your filters (trainer recipes only, craft reagents, pricing). Trainer rank-ups aren't included.</div>
-      <div class="level-sum">
-        <label class="cut">From <input id="lvFrom" class="cut-input skill-input" type="text" inputmode="numeric"></label>
-        <label class="cut">to <input id="lvTo" class="cut-input skill-input" type="text" inputmode="numeric"></label>
+      <div class="level-controls">
+        <label class="cut">Skill <input id="lvFrom" class="cut-input skill-input" type="text" inputmode="numeric" aria-label="From skill"></label>
+        <label class="cut">to <input id="lvTo" class="cut-input skill-input" type="text" inputmode="numeric" aria-label="To skill"></label>
+        <label class="cut">Leftover results
+          <select id="lvMode" class="select">${Object.entries(RESULT_MODES).map(([k, v]) =>
+            `<option value="${k}"${k === state.levelMode ? " selected" : ""}>${v}</option>`).join("")}</select></label>
+        <button type="button" class="copy-btn" id="levelCopy">Copy shopping list</button>
       </div>
       <div id="levelBody"></div>`;
   }
@@ -514,55 +619,58 @@ function renderLevel() {
   }
   const from = Math.max(1, Number($("lvFrom").value) || 1);
   const to = Math.min(max, Number($("lvTo").value) || max);
-  const o = opts();
-  const steps = from < to ? levelPath(prof, from, to, o) : [];
-  state.levelSteps = steps;
+  const o = opts(), mode = state.levelMode;
+  const plan = from < to ? levelPath(prof, from, to, o, mode) : null;
+  state.levelPlan = plan;
+  if (!plan) { $("levelBody").innerHTML = `<div class="level-intro">Pick a skill range above.</div>`; return; }
 
-  let total = 0, back = 0, crafts = 0;
-  const fees = new Map();
-  for (const st of steps) {
-    if (!st.c) continue;
-    const n = Math.ceil(st.crafts);
-    total += st.c.cost.total * n; back += st.c.back * n; crafts += n;
-    if (st.c.r.trainingcost) fees.set(st.c.r.id, st.c.r.trainingcost);
-  }
-  const feeSum = [...fees.values()].reduce((a, b) => a + b, 0);
-  const gaps = steps.filter((st) => !st.c);
-  const rows = steps.map((st) => {
+  const name = (id) => esc(state.items[id]?.name || "Item " + id);
+  const rows = plan.steps.map((st) => {
     const range = `<span class="mono">${st.from}–${st.to}</span>`;
     if (!st.c) return `<div class="step gap">${range}<span>No priced recipe gives skill-ups here</span><span></span><span></span><span></span></div>`;
-    const r = st.c.r, n = Math.ceil(st.crafts);
+    const r = st.c.r;
     const it = r.creates ? state.items[r.creates[0]] : null;
     const qc = qColor(it ? it.quality : 1);
+    const notes = [];
+    if (st.used > 0) notes.push(`<span class="mono">${fmtN(st.used)}</span> used by later steps`);
+    for (const [id, n] of st.fromStock) notes.push(`uses <span class="mono">${fmtN(n)}</span> ${name(id)} you made`);
     return `<div class="step">${range}
-      <span class="recipe-name"><a class="icon-link" href="${WH}/spell=${r.id}" target="_blank" rel="noopener" data-tip="recipe:${r.id}"><img class="row-icon" src="${ICON(it?.icon || r.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
-        <span style="color:${qc}" class="recipe-name">${esc(r.name)}</span></span>
-      <span class="num mono">×${n}</span>
+      <span class="step-craft"><span class="recipe-name"><a class="icon-link" href="${WH}/spell=${r.id}" target="_blank" rel="noopener" data-tip="recipe:${r.id}"><img class="row-icon" src="${ICON(it?.icon || r.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
+        <span style="color:${qc}">${esc(r.name)}</span></span>
+        ${notes.length ? `<span class="step-note">${notes.join(" · ")}</span>` : ""}</span>
+      <span class="num mono">×${st.n}</span>
       <span class="num">${money(st.c.cost.total)}</span>
-      <span class="num">${money(st.c.cost.total * n)}</span></div>`;
+      <span class="num">${money(st.buy)}</span></div>`;
   }).join("");
-  $("levelBody").innerHTML = !steps.length ? `<div class="level-intro">Pick a skill range above.</div>` : `
-    <div class="level-sum">
-      <span>Materials <b>${money(total)}</b></span>
-      <span class="muted">${crafts.toLocaleString("en-US")} crafts</span>
-      ${back ? `<span class="muted">Vendoring what you make gets back ${money(back)}</span>` : ""}
-      ${feeSum ? `<span class="muted">Trainer fees ${money(feeSum)}</span>` : ""}
-      <button type="button" class="copy-btn" id="levelCopy">Copy shopping list</button>
+  const gaps = plan.steps.some((st) => !st.c);
+  const backLabel = { vendor: "Vendored back", de: "Disenchanted back", ah: "Sold on the AH" }[mode];
+  const stat = (label, value, cls = "", sub = "") => `<div class="stat${cls}"><span class="stat-label">${label}</span><span class="stat-value">${value}</span>${sub}</div>`;
+  $("levelBody").innerHTML = `
+    <div class="stats">
+      ${stat("Materials to buy", money(plan.buy))}
+      ${stat("Trainer fees", money(plan.fees))}
+      ${stat(backLabel, money(plan.back))}
+      ${stat(plan.net < 0 ? "Net profit" : "Net cost", money(Math.abs(plan.net)), " stat-main", `<span class="stat-sub">${plan.crafts.toLocaleString("en-US")} crafts</span>`)}
     </div>
-    ${gaps.length ? `<div class="stale-text">${realm() ? "Some skill ranges have no recipe with a full price in this scan." : "There's no scan yet, so only recipes made from vendor reagents have a price."}</div>` : ""}
-    <div class="step head"><span>Skill</span><span>Craft</span><span class="num">Times</span><span class="num">Each</span><span class="num">Total</span></div>
+    ${mode === "ah" ? `<div class="level-intro">Counts every leftover as sold at the scan price, which a busy path can flood the AH with. Check On AH and Sold/day in the recipe list first.</div>` : ""}
+    ${gaps ? `<div class="stale-text">${realm() ? "Some skill ranges have no recipe with a full price in this scan." : "There's no scan yet, so only recipes made from vendor reagents have a price."}</div>` : ""}
+    <div class="step head"><span>Skill</span><span>Craft</span><span class="num">Times</span><span class="num">Each</span><span class="num">To buy</span></div>
     ${rows}`;
 }
 
 function levelShoppingText() {
   const need = new Map();
-  for (const st of state.levelSteps || []) {
-    if (!st.c) continue;
-    const n = Math.ceil(st.crafts);
-    for (const { id, n: per } of st.c.cost.parts) need.set(id, (need.get(id) || 0) + per * n);
+  for (const st of state.levelPlan?.steps || []) {
+    for (const [id, n, b] of st.toBuy || []) {
+      const e = need.get(id) || { n: 0, cost: 0, craft: b?.src === "Craft" };
+      e.n += n; e.cost += n * (b?.price || 0);
+      need.set(id, e);
+    }
   }
-  const lines = [...need].sort((a, b) => b[1] - a[1]).map(([id, n]) => `${fmtN(n)}× ${state.items[id]?.name || "Item " + id}`);
-  return [`${state.profession} ${$("lvFrom").value}–${$("lvTo").value}`, ...lines].join("\n");
+  const lines = [...need].sort((a, b) => b[1].cost - a[1].cost)
+    .map(([id, e]) => `${fmtN(e.n)}× ${state.items[id]?.name || "Item " + id}${e.craft ? " (craft)" : ""}, ${plainMoney(e.cost)}`);
+  return [`${state.profession} ${$("lvFrom").value}–${$("lvTo").value}`, ...lines,
+    `Total: ${plainMoney(state.levelPlan?.buy || 0)}`].join("\n");
 }
 
 function renderView() {
@@ -638,6 +746,7 @@ function readURL() {
   const prof = u.get("prof");
   if (prof) state.profession = prof === "favorites" ? FAV : Object.keys(state.profCounts).find((p) => slug(p) === slug(prof)) || null;
   if (u.get("view") === "level") state.view = "level";
+  if (RESULT_MODES[u.get("results")]) state.levelMode = u.get("results");
   if (DEPOSIT_RATE[u.get("deposit")]) { $("deposit").checked = true; $("duration").value = u.get("deposit"); $("duration").hidden = false; }
   if (u.get("q")) $("search").value = u.get("q");
   const sort = u.get("sort");
@@ -652,6 +761,7 @@ function writeURL() {
   const u = new URLSearchParams();
   if (state.profession) u.set("prof", state.profession === FAV ? "favorites" : slug(state.profession));
   if (state.view === "level" && state.profession && state.profession !== FAV) u.set("view", "level");
+  if (state.levelMode !== "vendor") u.set("results", state.levelMode);
   if ($("deposit").checked) u.set("deposit", $("duration").value);
   const q = $("search").value.trim();
   if (q) u.set("q", q);
@@ -913,6 +1023,12 @@ $("viewTabs").addEventListener("click", (e) => {
 $("level").addEventListener("input", (e) => {
   if (!e.target.matches("#lvFrom, #lvTo")) return;
   e.target.value = e.target.value.replace(/[^0-9]/g, "").slice(0, 3);
+  renderLevel();
+});
+$("level").addEventListener("change", (e) => {
+  if (e.target.id !== "lvMode") return;
+  state.levelMode = e.target.value;
+  writeURL();
   renderLevel();
 });
 $("level").addEventListener("click", (e) => {

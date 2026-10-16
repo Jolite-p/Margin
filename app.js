@@ -228,8 +228,9 @@ function render() {
     const r = x.r, open = state.open.has(r.id);
     const product = r.creates ? state.items[r.creates[0]] : null;
     const qc = qColor(product ? product.quality : 1);
-    const cascade = replay && i < ANIM_ROWS;
-    const delay = cascade ? `style="animation-delay:${i * ROW_STAGGER}ms"` : "";
+    // every row animates so none shows before the rows above it; past ANIM_ROWS they arrive together
+    const cascade = replay;
+    const delay = cascade ? `style="animation-delay:${Math.min(i, ANIM_ROWS) * ROW_STAGGER}ms"` : "";
     html.push(`<div class="row${cascade ? " " + anim : ""}${open ? " open" : ""}" data-id="${r.id}" ${delay}>
       <div class="recipe">
         <a class="icon-link" href="${WH}/${r.creates ? "item=" + r.creates[0] : "spell=" + r.id}" target="_blank" rel="noopener" data-tip="recipe:${r.id}" aria-label="${esc(r.name)} on Wowhead"><img class="row-icon" src="${ICON(product?.icon || r.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
@@ -237,7 +238,7 @@ function render() {
         <span class="recipe-meta">${esc(r.profession)} · <span class="mono ${difficulty(r, state.skills[r.profession])}">${r.skill ?? "?"}</span></span>
       </div>
       <div class="num cell-mono${isFew(x) ? " few" : ""}" title="${isFew(x) ? `Only ${x.qty} listed: one seller sets this price, so it may not hold` : ""}">${x.qty ?? ""}</div>
-      <div class="num cell-sm" title="${x.viaVendor ? "Selling to a vendor pays more than the AH" : ""}">${money(x.sell)}${x.viaVendor ? `<div class="tag-line">vendor</div>` : ""}</div>
+      <div class="num cell-sm" title="${x.viaVendor ? "Selling to a vendor pays more than the AH" : ""}">${money(x.sell)}${x.viaVendor && realm() ? `<div class="tag-line">vendor</div>` : ""}</div>
       <div class="num cell-sm">${money(x.cost.complete ? x.cost.total : null)}</div>
       <div class="num cell-mono muted">${pct(x.margin)}</div>
       <div class="num ${x.profit == null ? "muted" : x.profit > 0 ? "p-pos" : "p-neg"}"><span class="pv" data-i="${i}">${money(x.profit, true)}</span></div>

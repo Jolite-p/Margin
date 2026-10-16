@@ -332,6 +332,17 @@ a:hover { text-decoration: underline; }
 .step .recipe-name { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
 .step.gap { color: var(--neg); }
 .step.rank { color: var(--muted); font-size: 13px; }
+.flip-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 110px 110px 100px 130px; gap: 16px;
+  align-items: center; padding: 9px 0; border-top: 1px solid var(--line);
+}
+.flip-row.head { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-top: none; padding-bottom: 4px; }
+.flip-row .num { text-align: right; }
+.flip-row .recipe-name { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+@media (max-width: 960px) {
+  .flip-row { grid-template-columns: minmax(0, 1fr) 90px 90px 110px; }
+  .flip-row > :nth-child(4) { display: none; }
+}
 .step.rank b { color: var(--text); font-weight: 600; }
 @media (max-width: 960px) {
   .step { grid-template-columns: 80px minmax(0, 1fr) 60px 100px; }

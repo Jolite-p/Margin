@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChudsForever</title>
+  <script>
+    try { const t = localStorage.getItem("cf-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Azeret+Mono:wght@400;500;600&display=swap">
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand">
+        <img class="brand-cat" src="cat-logo.png" alt="" width="48" height="48">
+        <div class="brand-text">
+          <span class="brand-name">ChudsForever</span>
+          <span class="brand-sub">Your AH scans</span>
+        </div>
+      </div>
+
+      <div class="scan" id="scan"></div>
+
+      <input id="search" class="search" type="search" placeholder="Search…" autocomplete="off">
+
+      <nav class="group profs" id="profs" aria-label="Profession">
+        <span class="label">Profession</span>
+      </nav>
+
+      <div class="group pricing">
+        <span class="label">Pricing</span>
+        <select id="basis" class="select">
+          <option value="market">Market (cheapest 25%)</option>
+          <option value="min">Minimum buyout</option>
+        </select>
+        <label class="row-between">AH cut
+          <span class="cut"><input id="cut" class="cut-input" type="text" inputmode="decimal" value="5">%</span>
+        </label>
+        <label class="check"><input id="craftMats" type="checkbox" checked>Craft reagents when cheaper</label>
+        <label class="check"><input id="onlyProfit" type="checkbox">Profitable only</label>
+        <label class="check"><input id="showUnpriced" type="checkbox">Show unpriced recipes</label>
+      </div>
+
+      <button id="theme" class="theme-btn" type="button"></button>
+    </aside>
+
+    <main class="main">
+      <section class="top">
+        <h2 class="top-title">Most profitable right now</h2>
+        <div class="cards" id="cards"></div>
+      </section>
+
+      <div class="table">
+        <div class="thead" id="thead">
+          <button data-sort="name">Recipe</button>
+          <button data-sort="qty" class="num">On AH</button>
+          <button data-sort="sell" class="num">Sells for</button>
+          <button data-sort="cost" class="num">Cost</button>
+          <button data-sort="margin" class="num">Margin</button>
+          <button data-sort="profit" class="num">Profit</button>
+        </div>
+        <div id="rows"></div>
+        <div id="more" class="more"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

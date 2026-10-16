@@ -7,12 +7,20 @@ const PAGE = 100;
 const ANIM_ROWS = 20;        // rows that cascade in and count up; the rest render instantly
 const ROW_STAGGER = 18;      // ms between rows in the cascade
 const COUNT_MS = 500;        // count-up duration
+const FEW = 3;               // fewer listed than this and one seller sets the price
+const STALE_H = 24;          // scans older than this get a warning
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+
+function loadSkills() {
+  try { return JSON.parse(localStorage.getItem("cf-skills")) || {}; } catch (e) { return {}; }
+}
 
 const state = {
   recipes: [], items: {}, byProduct: {}, profCounts: {},
-  prices: null, realmKey: null, pricesMtime: -1,
+  prices: null, realmKey: null, pricesMtime: -1, history: null,
   profession: null,
+  skills: loadSkills(),      // profession -> the visitor's skill, kept in their browser
+  make: new Map(),           // recipe id -> how many to craft, for the shopping list
   sort: { key: "profit", dir: -1 },
   shown: PAGE, open: new Set(),
   cascade: 0,                // bumps when the row cascade should replay
@@ -27,8 +35,18 @@ const opts = () => ({
   craftMats: $("craftMats").checked,
   onlyProfit: $("onlyProfit").checked,
   showUnpriced: $("showUnpriced").checked,
+  hideFew: $("hideFew").checked,
+  skillUps: $("skillUps").checked,
   q: $("search").value.trim().toLowerCase(),
 });
+const isFew = (x) => x.qty > 0 && x.qty < FEW && !x.viaVendor;
+
+// Trainer colors: orange below colors[1], yellow below colors[2], green below colors[3], then grey.
+function difficulty(r, skill) {
+  if (skill == null || !r.colors) return "";
+  const [, y, g, grey] = r.colors;
+  return skill < y ? "sk-orange" : skill < g ? "sk-yellow" : skill < grey ? "sk-green" : "sk-grey";
+}
 
 // ---------------------------------------------------------------- formatting
 
@@ -183,6 +201,14 @@ function render() {
   let rows = all.filter((x) => (showUnpriced || x.profit != null) &&
     (!state.profession || x.r.profession === state.profession) && matches(x.r, o.q));
   if (o.onlyProfit) rows = rows.filter((x) => x.profit > 0);
+  if (o.hideFew) rows = rows.filter((x) => !isFew(x));
+  rows = rows.filter((x) => {
+    const s = state.skills[x.r.profession];
+    if (s == null) return true;
+    if ((x.r.skill ?? 0) > s) return false;
+    return !o.skillUps || difficulty(x.r, s) !== "sk-grey";
+  });
+  writeURL();
   const key = SORT[state.sort.key], dir = state.sort.dir;
   rows.sort((a, b) => {
     const ka = key(a), kb = key(b);
@@ -208,10 +234,10 @@ function render() {
       <div class="recipe">
         <a class="icon-link" href="${WH}/${r.creates ? "item=" + r.creates[0] : "spell=" + r.id}" target="_blank" rel="noopener" data-tip="recipe:${r.id}" aria-label="${esc(r.name)} on Wowhead"><img class="row-icon" src="${ICON(product?.icon || r.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
         <span class="recipe-name" style="color:${qc}">${esc(r.name)}${r.creates && r.creates[1] !== 1 ? ` <span class="recipe-meta">×${r.creates[1]}</span>` : ""}</span>
-        <span class="recipe-meta">${esc(r.profession)} · <span class="mono">${r.skill ?? "?"}</span></span>
+        <span class="recipe-meta">${esc(r.profession)} · <span class="mono ${difficulty(r, state.skills[r.profession])}">${r.skill ?? "?"}</span></span>
       </div>
-      <div class="num cell-mono">${x.qty ?? ""}</div>
-      <div class="num cell-sm" title="${x.viaVendor ? "Vendor sell price beats the AH" : ""}">${money(x.sell)}</div>
+      <div class="num cell-mono${isFew(x) ? " few" : ""}" title="${isFew(x) ? `Only ${x.qty} listed: one seller sets this price, so it may not hold` : ""}">${x.qty ?? ""}</div>
+      <div class="num cell-sm" title="${x.viaVendor ? "Selling to a vendor pays more than the AH" : ""}">${money(x.sell)}${x.viaVendor ? `<div class="tag-line">vendor</div>` : ""}</div>
       <div class="num cell-sm">${money(x.cost.complete ? x.cost.total : null)}</div>
       <div class="num cell-mono muted">${pct(x.margin)}</div>
       <div class="num ${x.profit == null ? "muted" : x.profit > 0 ? "p-pos" : "p-neg"}"><span class="pv" data-i="${i}">${money(x.profit, true)}</span></div>
@@ -277,33 +303,108 @@ function renderCards(all) {
     const prev = rebuild ? 0 : Number(el.dataset.v);
     el.dataset.v = x.profit;
     countUp(el, prev, x.profit, rebuild ? i * 90 : 0);
-    card.querySelector("[data-f]").innerHTML = `${esc(x.r.profession)} · <span class="mono">${x.qty}</span> on AH`;
+    card.querySelector("[data-f]").innerHTML = `${esc(x.r.profession)} · <span class="mono${isFew(x) ? " few" : ""}">${x.qty}</span> on AH`;
     card.querySelector("[data-m]").textContent = pct(x.margin);
   });
 }
 
 function detail(x, o) {
-  const lines = x.cost.parts.map(({ id, n, buy }) => {
+  const n = state.make.get(x.r.id) || 1;
+  return `<div class="detail" data-detail="${x.r.id}">
+    <div class="shop-bar">Make <input class="cut-input" data-make="${x.r.id}" type="text" inputmode="numeric" value="${n}" aria-label="How many to craft">
+      <span class="muted">${x.r.creates ? `= <span class="mono">${fmtN(n * x.r.creates[1])}</span> ${esc(state.items[x.r.creates[0]]?.name || "")}` : ""}</span>
+      <button type="button" class="copy-btn" data-copy="${x.r.id}">Copy shopping list</button></div>
+    <div class="detail-body">${detailBody(x, o, n)}</div>
+  </div>`;
+}
+
+const fmtN = (v) => (Math.round(v * 10) / 10).toLocaleString("en-US");
+
+// Reagent lines and totals for crafting the recipe n times.
+function detailBody(x, o, n) {
+  const lines = x.cost.parts.map(({ id, n: per, buy }) => {
     const it = state.items[id] || {};
     const via = buy?.recipe ? ` · ${esc(buy.recipe.name)}` : "";
     return `<div class="reagent">
       <a href="${WH}/item=${id}" target="_blank" rel="noopener" data-tip="item:${id}" style="color:${qColor(it.quality)}">
         <img src="${ICON(it.icon)}" alt="" loading="lazy" style="--q:${qColor(it.quality)}">
-        <span class="nm">${esc(it.name || "Item " + id)}</span><span class="muted mono">×${n}</span></a>
+        <span class="nm">${esc(it.name || "Item " + id)}</span><span class="muted mono">×${fmtN(per * n)}</span></a>
       <span class="src${buy ? "" : " missing"}" title="${buy ? esc(buy.src + via) : ""}">${buy ? buy.src : "No price"}</span>
       <span class="num">${buy ? money(buy.price) : money(null)}</span>
-      <span class="num">${buy ? money(buy.price * n) : ""}</span>
+      <span class="num">${buy ? money(buy.price * per * n) : ""}</span>
     </div>`;
   }).join("");
+  let totals = "";
+  if (x.cost.complete || x.sell != null) {
+    totals = `<div class="totals">
+      <span class="muted">Cost${n > 1 ? ` ×${n}` : ""}</span><span class="num">${money(x.cost.complete ? x.cost.total * n : null)}</span>
+      ${x.sell != null ? `<span class="muted">Sells for${n > 1 ? ` ×${n}` : ""}${x.fee ? `, after ${o.cut}% AH cut` : ""}</span><span class="num">${money((x.sell - x.fee) * n)}</span>` : ""}
+      ${x.profit != null ? `<span class="muted">Profit</span><span class="num ${x.profit > 0 ? "p-pos" : "p-neg"}">${money(x.profit * n, true)}</span>` : ""}
+    </div>`;
+  }
+  const trend = x.r.creates ? trendHTML(x.r.creates[0], 160) : "";
   const notes = [];
   if (!x.r.creates) notes.push("This recipe doesn't create an item (e.g. an enchant), so there's nothing to sell.");
   else if (!realm()) notes.push("No scan yet, so reagents only have vendor prices.");
   else if (x.viaVendor) notes.push("Sells for more at a vendor than on the AH, so the vendor price is used.");
-  else if (x.sell != null) notes.push(`AH cut ${o.cut}%: ${money(x.fee)}. Deposit not included.`);
+  else if (x.sell != null) notes.push("AH deposit not included.");
+  if (isFew(x)) notes.push(`<span class="few">Only ${x.qty} listed, so this price may not hold.</span>`);
   if (x.r.trainingcost) notes.push(`Trainer cost ${money(x.r.trainingcost)}.`);
-  return `<div class="detail">${lines}
-    <div class="detail-note">${notes.join(" ")} <a href="${WH}/spell=${x.r.id}" target="_blank" rel="noopener">Recipe on Wowhead ↗</a></div>
-  </div>`;
+  return `${lines}${totals}
+    ${trend ? `<div class="trend"><span class="muted">Price, last 14 days</span>${trend}</div>` : ""}
+    <div class="detail-note">${notes.join(" ")} <a href="${WH}/spell=${x.r.id}" target="_blank" rel="noopener">Recipe on Wowhead ↗</a></div>`;
+}
+
+function shoppingText(x, n) {
+  const name = (id) => state.items[id]?.name || "Item " + id;
+  const out = [`${x.r.name} ×${n}`];
+  for (const { id, n: per, buy } of x.cost.parts) {
+    out.push(`${fmtN(per * n)}× ${name(id)}${buy ? ` (${buy.src}, ${plainMoney(buy.price * per * n)})` : ""}`);
+  }
+  if (x.cost.complete) out.push(`Total: ${plainMoney(x.cost.total * n)}`);
+  return out.join("\n");
+}
+
+function plainMoney(v) {
+  const a = Math.round(Math.abs(v)), g = Math.floor(a / 10000), s = Math.floor((a % 10000) / 100), c = a % 100;
+  return (v < 0 ? "-" : "") + [g && `${g}g`, s && `${s}s`, (c || !a) && `${c}c`].filter(Boolean).join(" ");
+}
+
+// ---------------------------------------------------------------- price history
+
+// history.json: { realm: { t: [scan times], p: { itemId: [market price per scan, 0 = not listed] } } }
+function series(id, days = 14) {
+  const h = state.history?.[state.realmKey];
+  const arr = h?.p[id];
+  if (!arr) return [];
+  const since = h.t[h.t.length - 1] - days * 86400;
+  return h.t.map((t, i) => [t, arr[i]]).filter(([t, v]) => v > 0 && t >= since);
+}
+
+// Current market price against the average of the earlier scans in the last 7 days.
+function weekChange(id) {
+  const pts = series(id, 7);
+  if (pts.length < 2) return null;
+  const now = pts[pts.length - 1][1];
+  const before = pts.slice(0, -1).reduce((a, [, v]) => a + v, 0) / (pts.length - 1);
+  return Math.round((now - before) / before * 100);
+}
+
+function trendHTML(id, w = 120) {
+  const pts = series(id);
+  if (pts.length < 2) return "";
+  const h = 26, t0 = pts[0][0], t1 = pts[pts.length - 1][0] || t0 + 1;
+  const vs = pts.map(([, v]) => v), lo = Math.min(...vs), hi = Math.max(...vs);
+  const xy = pts.map(([t, v]) => [
+    ((t - t0) / (t1 - t0 || 1)) * w,
+    hi === lo ? h / 2 : h - 2 - ((v - lo) / (hi - lo)) * (h - 4),
+  ]);
+  const last = xy[xy.length - 1];
+  const ch = weekChange(id);
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+      <polyline points="${xy.map((p) => p.map((n) => n.toFixed(1)).join(",")).join(" ")}"/>
+      <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="2.5"/></svg>` +
+    (ch == null ? "" : `<span class="mono ${ch > 0 ? "up" : ch < 0 ? "down" : "muted"}" title="Now vs. the average of the past 7 days">${pct(ch) || "0%"} 7d</span>`);
 }
 
 function renderProfs() {
@@ -335,12 +436,55 @@ function renderScan() {
   }
   if (!state.realmKey || !p.realms[state.realmKey]) state.realmKey = realms[0][0];
   const r = p.realms[state.realmKey];
-  box.innerHTML = `<div class="scan-head"><span class="dot"></span>Scan · ${scanTime(r.time)}</div>
+  const ageH = (Date.now() / 1000 - r.time) / 3600;
+  const age = ageH < 48 ? `${Math.floor(ageH)} hours` : `${Math.floor(ageH / 24)} days`;
+  box.innerHTML = `<div class="scan-head"><span class="dot${ageH > STALE_H ? " stale" : ""}"></span>Scan · ${scanTime(r.time)}</div>
+    ${ageH > STALE_H ? `<span class="stale-text">Prices are ${age} old and may have changed.</span>` : ""}
     <span class="muted">${r.auctions.toLocaleString("en-US")} auctions · ${esc(state.realmKey)}</span>
     ${realms.length > 1 ? `<select id="realm" class="select" aria-label="Realm">${realms.map(([k]) =>
       `<option value="${esc(k)}"${k === state.realmKey ? " selected" : ""}>${esc(k)}</option>`).join("")}</select>` : ""}`;
   const sel = $("realm");
   if (sel) sel.onchange = () => { state.realmKey = sel.value; state.cascade++; renderScan(); render(); };
+}
+
+function renderSkill() {
+  const p = state.profession;
+  $("skillProf").textContent = p || "Pick a profession";
+  $("skill").hidden = !p;
+  $("skill").value = p && state.skills[p] != null ? state.skills[p] : "";
+}
+
+// ---------------------------------------------------------------- shareable links
+
+// The address mirrors the view (profession, search, sort, filters) so it can be sent to someone.
+const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+const FLAGS = { only: "onlyProfit", unpriced: "showUnpriced", few: "hideFew", skillups: "skillUps" };
+
+function readURL() {
+  const u = new URLSearchParams(location.search);
+  const prof = u.get("prof");
+  if (prof) state.profession = Object.keys(state.profCounts).find((p) => slug(p) === slug(prof)) || null;
+  if (u.get("q")) $("search").value = u.get("q");
+  const sort = u.get("sort");
+  if (sort && SORT[sort.replace(/^-/, "")]) state.sort = { key: sort.replace(/^-/, ""), dir: sort.startsWith("-") ? -1 : 1 };
+  if (u.get("basis") === "min") $("basis").value = "min";
+  if (u.get("cut") != null) $("cut").value = u.get("cut");
+  if (u.get("craft") === "0") $("craftMats").checked = false;
+  for (const [k, id] of Object.entries(FLAGS)) if (u.get(k) === "1") $(id).checked = true;
+}
+
+function writeURL() {
+  const u = new URLSearchParams();
+  if (state.profession) u.set("prof", slug(state.profession));
+  const q = $("search").value.trim();
+  if (q) u.set("q", q);
+  if (state.sort.key !== "profit" || state.sort.dir !== -1) u.set("sort", (state.sort.dir < 0 ? "-" : "") + state.sort.key);
+  if ($("basis").value !== "market") u.set("basis", $("basis").value);
+  if ($("cut").value !== "5") u.set("cut", $("cut").value);
+  if (!$("craftMats").checked) u.set("craft", "0");
+  for (const [k, id] of Object.entries(FLAGS)) if ($(id).checked) u.set(k, "1");
+  const next = u.toString() ? `?${u}` : location.pathname;
+  if (next !== location.search && !(next === location.pathname && !location.search)) history.replaceState(null, "", next);
 }
 
 function renderTheme() {
@@ -353,8 +497,8 @@ function renderTheme() {
 // locally start.bat serves them live from SavedVariables.
 const HOSTED = !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
 const DATA = HOSTED
-  ? { prices: () => `data/prices.json?t=${Date.now()}`, recipes: "data/recipes.json" }
-  : { prices: () => "/api/prices", recipes: "/api/recipes" };
+  ? { prices: () => `data/prices.json?t=${Date.now()}`, history: () => `data/history.json?t=${Date.now()}`, recipes: "data/recipes.json" }
+  : { prices: () => "/api/prices", history: () => "/api/history", recipes: "/api/recipes" };
 
 async function loadPrices() {
   try {
@@ -363,6 +507,8 @@ async function loadPrices() {
     state.pricesMtime = data.mtime;
     state.prices = data;
     state.cascade++;   // a new scan remounts the rows
+    // the history gains a point with each new scan; without it the trend lines just stay hidden
+    try { state.history = await (await fetch(DATA.history())).json(); } catch (e) { state.history = null; }
   } catch (e) {
     if (state.prices?.error) return;
     state.prices = { error: HOSTED ? "Couldn't load the prices. Try refreshing." : "Can't reach the ChudsForever server. Is start.bat running?" };
@@ -382,7 +528,9 @@ async function init() {
     state.profCounts[r.profession] = (state.profCounts[r.profession] || 0) + 1;
     if (r.creates) (state.byProduct[r.creates[0]] ||= []).push(r);
   }
+  readURL();
   renderProfs();
+  renderSkill();
   await loadPrices();
   setInterval(loadPrices, HOSTED ? 60000 : 5000);
 }
@@ -413,7 +561,9 @@ function tipPrices(id, extra = "") {
   let out = "";
   if (p) {
     out += tipLine("AH market", money(p[1])) + tipLine("AH lowest", money(p[0])) +
-      tipLine("On AH", `<span class="mono">${p[2]}</span>`);
+      tipLine("On AH", p[2] < FEW ? `<span class="few"><span class="mono">${p[2]}</span> · few listed</span>` : `<span class="mono">${p[2]}</span>`);
+    const trend = trendHTML(id, 90);
+    if (trend) out += tipLine("14 days", `<span class="trend">${trend}</span>`);
   } else if (realm()) {
     out += tipLine("AH", `<span class="muted">not listed in this scan</span>`);
   }
@@ -507,7 +657,18 @@ addEventListener("scroll", () => { tip.hidden = true; tipFor = null; }, { passiv
 function refilter() { state.shown = PAGE; state.cascade++; render(); }
 
 $("rows").addEventListener("click", (e) => {
-  if (e.target.closest("a")) return;
+  const copy = e.target.closest("[data-copy]");
+  if (copy) {
+    const r = state.recipes.find((x) => x.id === Number(copy.dataset.copy));
+    const o = opts();
+    const text = shoppingText(evaluate(r, o, makeBuyResolver(o)), state.make.get(r.id) || 1);
+    navigator.clipboard.writeText(text).then(() => {
+      copy.textContent = "Copied";
+      setTimeout(() => { copy.textContent = "Copy shopping list"; }, 1500);
+    }, () => { copy.textContent = "Couldn't copy"; });
+    return;
+  }
+  if (e.target.closest("a, input, .shop-bar")) return;
   const row = e.target.closest(".row");
   if (!row) return;
   const id = Number(row.dataset.id);
@@ -518,8 +679,32 @@ $("profs").addEventListener("click", (e) => {
   const b = e.target.closest(".prof");
   if (!b) return;
   state.profession = b.dataset.prof || null;
-  renderProfs(); refilter();
+  renderProfs(); renderSkill(); refilter();
 });
+// the shopping list redraws in place so the Make box keeps focus while typing
+$("rows").addEventListener("input", (e) => {
+  const inp = e.target.closest("[data-make]");
+  if (!inp) return;
+  inp.value = inp.value.replace(/[^0-9]/g, "").slice(0, 4);
+  const id = Number(inp.dataset.make), n = Math.max(1, Number(inp.value) || 1);
+  state.make.set(id, n);
+  const r = state.recipes.find((x) => x.id === id), o = opts();
+  const x = evaluate(r, o, makeBuyResolver(o));
+  const box = inp.closest(".detail");
+  box.querySelector(".detail-body").innerHTML = detailBody(x, o, n);
+  if (r.creates) box.querySelector(".shop-bar .muted").innerHTML =
+    `= <span class="mono">${fmtN(n * r.creates[1])}</span> ${esc(state.items[r.creates[0]]?.name || "")}`;
+});
+$("skill").addEventListener("input", (e) => {
+  e.target.value = e.target.value.replace(/[^0-9]/g, "").slice(0, 3);
+  const p = state.profession;
+  if (!p) return;
+  if (e.target.value === "") delete state.skills[p]; else state.skills[p] = Number(e.target.value);
+  try { localStorage.setItem("cf-skills", JSON.stringify(state.skills)); } catch (err) {}
+  refilter();
+});
+$("skillUps").addEventListener("change", refilter);
+$("hideFew").addEventListener("change", refilter);
 $("thead").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;

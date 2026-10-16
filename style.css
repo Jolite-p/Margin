@@ -12,6 +12,10 @@
   --pos: oklch(0.8 0.16 150);
   --pos-bg: oklch(0.8 0.16 150 / 0.13);
   --neg: oklch(0.72 0.15 25);
+  --warn: oklch(0.8 0.14 70);
+  --sk-orange: oklch(0.74 0.16 50);
+  --sk-yellow: oklch(0.86 0.15 95);
+  --sk-green: oklch(0.78 0.17 145);
   --q-poor: #93918b;
   --q-common: #ecebe6;
   --q-uncommon: oklch(0.8 0.18 145);
@@ -37,6 +41,10 @@
   --pos: oklch(0.5 0.14 150);
   --pos-bg: oklch(0.6 0.14 150 / 0.12);
   --neg: oklch(0.53 0.17 25);
+  --warn: oklch(0.6 0.15 60);
+  --sk-orange: oklch(0.6 0.17 45);
+  --sk-yellow: oklch(0.62 0.13 90);
+  --sk-green: oklch(0.52 0.15 145);
   --q-poor: #6b6963;
   --q-common: #1c1c1a;
   --q-uncommon: oklch(0.5 0.15 145);
@@ -94,6 +102,8 @@ a:hover { text-decoration: underline; }
 .scan-head { display: flex; align-items: center; gap: 8px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--pos); flex: none; animation: pulse 2s infinite; }
 .dot.off { background: var(--muted); animation: none; }
+.dot.stale { background: var(--warn); animation: none; }
+.stale-text { color: var(--warn); }
 .scan code { font-family: var(--f-mono); font-size: 12px; }
 .scan .select { margin-top: 2px; }
 
@@ -120,20 +130,35 @@ a:hover { text-decoration: underline; }
 .prof.on { background: var(--panel2); font-weight: 600; box-shadow: inset 3px 0 0 var(--gold); }
 
 .pricing { gap: 12px; font-size: 13px; }
+/* own chevron instead of the browser's, which sits flush against the right border */
 .select {
-  padding: 7px 8px; border-radius: 7px;
-  border: 1px solid var(--line); background: var(--bg); font-size: 13px;
+  appearance: none; -webkit-appearance: none;
+  padding: 7px 30px 7px 10px; border-radius: 7px;
+  border: 1px solid var(--line); font-size: 13px; cursor: pointer;
+  background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%2393918b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center / 12px;
 }
+.select:focus { outline: none; border-color: var(--gold); }
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 .cut { display: flex; gap: 6px; align-items: center; }
 .cut-input {
   width: 40px; padding: 6px 8px; border-radius: 7px;
   border: 1px solid var(--line); background: var(--bg);
-  font-family: var(--f-mono); font-size: 13px; outline: none;
+  font-family: var(--f-mono); font-size: 13px; outline: none; text-align: center;
 }
 .cut-input:focus { border-color: var(--gold); }
 .check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 .check input { accent-color: var(--gold); margin: 0; }
+
+.skill { gap: 10px; font-size: 13px; }
+.skill[hidden] { display: none; }
+.skill-input { width: 52px; }
+.skill-hint { color: var(--muted); font-size: 12px; }
+
+/* recipe difficulty, like the trainer window: orange, yellow, green, grey */
+.sk-orange { color: var(--sk-orange); }
+.sk-yellow { color: var(--sk-yellow); }
+.sk-green { color: var(--sk-green); }
+.sk-grey { color: var(--muted); }
 
 .theme-btn {
   margin-top: auto;
@@ -214,6 +239,11 @@ a:hover { text-decoration: underline; }
 .recipe-meta { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 4; }
 .cell-mono { font-family: var(--f-mono); font-size: 13px; }
 .cell-sm { font-size: 13px; }
+.few { color: var(--warn); }
+.tag-line {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--gold); line-height: 1; margin-top: 3px;
+}
 
 .empty { padding: 48px 24px; border-top: 1px solid var(--line); color: var(--muted); text-align: center; }
 
@@ -232,6 +262,29 @@ a:hover { text-decoration: underline; }
 .src.missing { color: var(--neg); }
 .detail-note { color: var(--muted); }
 .detail-note a { color: var(--gold); }
+
+.shop-bar { display: flex; align-items: center; gap: 10px; max-width: 720px; }
+.shop-bar .cut-input { width: 52px; }
+.shop-bar .muted { flex: 1; }
+.copy-btn {
+  padding: 5px 10px; border: 1px solid var(--line); border-radius: 7px;
+  background: transparent; font-size: 12px; cursor: pointer;
+}
+.copy-btn:hover { background: var(--panel2); }
+.detail-body { display: flex; flex-direction: column; gap: 8px; }
+.totals {
+  display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 4px 16px;
+  max-width: 720px; padding-top: 8px; border-top: 1px solid var(--line);
+}
+.totals .num { text-align: right; }
+.totals .p-pos, .totals .p-neg { font-size: 14px; }
+
+.trend { display: flex; align-items: center; gap: 8px; }
+.spark { display: block; overflow: visible; }
+.spark polyline { fill: none; stroke: var(--gold); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.spark circle { fill: var(--gold); }
+.up { color: var(--pos); }
+.down { color: var(--neg); }
 
 .more { padding: 16px 24px 40px; color: var(--muted); font-size: 13px; display: flex; gap: 12px; align-items: center; }
 .more button {

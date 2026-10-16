@@ -546,7 +546,7 @@ function levelPath(prof, from, to, o, mode) {
     for (const st of steps) {
       if (st.c) for (const [id, n] of st.c.r.reagents) next.set(id, (next.get(id) || 0) + n * Math.ceil(st.crafts));
     }
-    const plan = walkPath(steps, o, mode);
+    const plan = walkPath(steps, o, mode, resolve);
     if (!best || plan.net < best.net) best = plan;
     const settled = next.size === demand.size && [...next].every(([k, v]) => demand.get(k) === v);
     demand = next;
@@ -555,10 +555,53 @@ function levelPath(prof, from, to, o, mode) {
   return best;
 }
 
+// The AH's price steps for an item, cheapest first, as [price, count, price, count, ...]. Items
+// without steps (all at about one price, or a scan from before the addon saved them) are one step
+// at the usual price.
+function ladderOf(id, price) {
+  const d = realm()?.depth?.[id];
+  if (d) return d;
+  const p = realm()?.prices[id];
+  return p ? [price, p[2]] : [];
+}
+
+// Buys in bulk: each call costs the next n units, carrying on up the AH listings from where earlier
+// calls stopped. A unit never costs more than the vendor sells it for, crafted reagents are bought
+// as their own reagents, and units beyond what the AH has are priced at its last step and counted
+// in short.
+function makeBulkBuyer(resolve) {
+  const bought = new Map(), short = new Map();
+  function take(id, n) {
+    const b = resolve(id);
+    if (!b || n <= 0) return 0;
+    if (b.src === "Craft") {
+      const r = b.recipe;
+      return r.reagents.reduce((a, [rid, per]) => a + take(rid, (per * n) / r.creates[1]), 0);
+    }
+    if (b.src === "Vendor") return b.price * n;
+    const steps = ladderOf(id, b.price), cap = vendorPrice(id) ?? Infinity;
+    let skip = bought.get(id) || 0, left = n, cost = 0;
+    bought.set(id, skip + n);
+    for (let i = 0; i < steps.length && left > 0; i += 2) {
+      let c = steps[i + 1];
+      if (skip >= c) { skip -= c; continue; }
+      c -= skip; skip = 0;
+      const t = Math.min(c, left);
+      cost += t * Math.min(steps[i], cap); left -= t;
+    }
+    if (left > 0) {
+      short.set(id, (short.get(id) || 0) + left);
+      cost += left * Math.min(steps.length ? steps[steps.length - 2] : b.price, cap);
+    }
+    return cost;
+  }
+  return { take, short };
+}
+
 // Goes through the steps in order with a stock of what you've crafted: later steps use it before
 // buying, and whatever is left at the end is vendored, disenchanted or sold.
-function walkPath(steps, o, mode) {
-  const stock = new Map(), madeBy = new Map();
+function walkPath(steps, o, mode, resolve) {
+  const stock = new Map(), madeBy = new Map(), bulk = makeBulkBuyer(resolve);
   let buy = 0, crafts = 0;
   const fees = new Map();
   for (const st of steps) {
@@ -570,7 +613,10 @@ function walkPath(steps, o, mode) {
     for (const { id, n: per, buy: b } of st.c.cost.parts) {
       const need = per * n, have = stock.get(id) || 0, use = Math.min(have, need);
       if (use > 0) { stock.set(id, have - use); st.fromStock.push([id, use]); }
-      if (need - use > 0) { st.toBuy.push([id, need - use, b]); st.buy += (need - use) * b.price; }
+      if (need - use > 0) {
+        const cost = bulk.take(id, need - use);
+        st.toBuy.push([id, need - use, b, cost]); st.buy += cost;
+      }
     }
     buy += st.buy;
     if (st.c.pid) {
@@ -590,7 +636,7 @@ function walkPath(steps, o, mode) {
     }
   }
   const feeSum = [...fees.values()].reduce((a, b) => a + b, 0);
-  return { steps, buy, back, crafts, fees: feeSum, net: buy + feeSum - back };
+  return { steps, buy, back, crafts, fees: feeSum, net: buy + feeSum - back, short: bulk.short };
 }
 
 function renderLevel() {
@@ -598,7 +644,8 @@ function renderLevel() {
   const box = $("level");
   if (!box.querySelector("#levelBody")) {
     box.innerHTML = `<div class="level-intro">The cheapest recipe to craft at each skill level, using the prices from the scan.
-      Yellow and green recipes count the extra crafts you need when a skill-up doesn't happen. What you craft is
+      Yellow and green recipes count the extra crafts you need when a skill-up doesn't happen. Materials are bought
+      through the AH listings cheapest first, so buying a lot costs what it really would. What you craft is
       used by later steps when they need it; the rest is handled the way you pick below.
       Uses your filters (trainer recipes only, craft reagents, pricing). Trainer rank-ups aren't included.</div>
       <div class="level-controls">
@@ -653,6 +700,8 @@ function renderLevel() {
       ${stat(plan.net < 0 ? "Net profit" : "Net cost", money(Math.abs(plan.net)), " stat-main", `<span class="stat-sub">${plan.crafts.toLocaleString("en-US")} crafts</span>`)}
     </div>
     ${mode === "ah" ? `<div class="level-intro">Counts every leftover as sold at the scan price, which a busy path can flood the AH with. Check On AH and Sold/day in the recipe list first.</div>` : ""}
+    ${plan.short.size ? `<div class="level-intro"><span class="stale-text">Not enough on the AH:</span> ${[...plan.short].map(([id, n]) =>
+      `${name(id)} (${fmtN(n)} more than listed)`).join(", ")}. Those are priced at the most expensive listing.</div>` : ""}
     ${gaps ? `<div class="stale-text">${realm() ? "Some skill ranges have no recipe with a full price in this scan." : "There's no scan yet, so only recipes made from vendor reagents have a price."}</div>` : ""}
     <div class="step head"><span>Skill</span><span>Craft</span><span class="num">Times</span><span class="num">Each</span><span class="num">To buy</span></div>
     ${rows}`;
@@ -661,9 +710,9 @@ function renderLevel() {
 function levelShoppingText() {
   const need = new Map();
   for (const st of state.levelPlan?.steps || []) {
-    for (const [id, n, b] of st.toBuy || []) {
+    for (const [id, n, b, cost] of st.toBuy || []) {
       const e = need.get(id) || { n: 0, cost: 0, craft: b?.src === "Craft" };
-      e.n += n; e.cost += n * (b?.price || 0);
+      e.n += n; e.cost += cost;
       need.set(id, e);
     }
   }

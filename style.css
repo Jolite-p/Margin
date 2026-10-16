@@ -138,6 +138,8 @@ a:hover { text-decoration: underline; }
   background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%2393918b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 10px center / 12px;
 }
 .select:focus { outline: none; border-color: var(--gold); }
+.select-sm { padding: 4px 26px 4px 8px; background-position: right 8px center; font-family: var(--f-mono); }
+.select-sm[hidden] { display: none; }
 .row-between { display: flex; justify-content: space-between; align-items: center; }
 .cut { display: flex; gap: 6px; align-items: center; }
 .cut-input {
@@ -204,7 +206,7 @@ a:hover { text-decoration: underline; }
 
 .thead, .row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 56px 110px 110px 80px 150px;
+  grid-template-columns: minmax(0, 1fr) 56px 70px 110px 110px 80px 150px;
   gap: 16px;
   align-items: center;
 }
@@ -231,6 +233,13 @@ a:hover { text-decoration: underline; }
 .recipe { display: flex; align-items: center; gap: 10px; min-width: 0; container-type: inline-size; }
 /* not enough room for both: keep the name whole and drop the profession note */
 @container (max-width: 340px) { .recipe-meta { display: none; } }
+.fav {
+  flex: none; width: 16px; padding: 0; border: none; background: none; cursor: pointer;
+  font-size: 15px; line-height: 1; color: var(--line); transition: color .15s, transform .15s;
+}
+.row:hover .fav { color: var(--muted); }
+.fav:hover { transform: scale(1.2); }
+.fav.on, .row:hover .fav.on { color: var(--gold); }
 .icon-link { display: inline-flex; flex: none; line-height: 0; }
 .icon-link:hover img { filter: brightness(1.15); }
 .row-icon { width: 22px; height: 22px; border-radius: 0; border: 1px solid; flex: none; }
@@ -285,6 +294,34 @@ a:hover { text-decoration: underline; }
 .spark circle { fill: var(--gold); }
 .up { color: var(--pos); }
 .down { color: var(--neg); }
+
+.view-tabs { display: flex; gap: 4px; padding: 16px 24px 0; }
+.view-tabs[hidden] { display: none; }
+.view-tabs button {
+  padding: 7px 14px; border: 1px solid var(--line); border-radius: 8px;
+  background: transparent; font-size: 13px; cursor: pointer; color: var(--muted);
+}
+.view-tabs button:hover { color: var(--text); }
+.view-tabs button.on { background: var(--panel2); color: var(--text); font-weight: 600; border-color: transparent; }
+
+.level { padding: 16px 24px 40px; display: flex; flex-direction: column; gap: 12px; font-size: 14px; }
+.level[hidden], .table[hidden] { display: none; }
+.level-intro { color: var(--muted); font-size: 13px; max-width: 760px; }
+.level-sum { display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: baseline; }
+.level-sum b { font-size: 22px; font-weight: 600; }
+.level-sum .copy-btn { margin-left: auto; }
+.step {
+  display: grid; grid-template-columns: 96px minmax(0, 1fr) 90px 120px 120px; gap: 16px;
+  align-items: center; padding: 9px 0; border-top: 1px solid var(--line);
+}
+.step.head { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-top: none; padding-bottom: 4px; }
+.step .num { text-align: right; }
+.step .recipe-name { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.step.gap { color: var(--neg); }
+@media (max-width: 960px) {
+  .step { grid-template-columns: 80px minmax(0, 1fr) 60px 100px; }
+  .step > :nth-child(4) { display: none; }
+}
 
 .more { padding: 16px 24px 40px; color: var(--muted); font-size: 13px; display: flex; gap: 12px; align-items: center; }
 .more button {
@@ -357,7 +394,7 @@ a:hover { text-decoration: underline; }
 /* ------------------------------------------------------------- small screens */
 
 @media (max-width: 1180px) {
-  .thead, .row { grid-template-columns: minmax(0, 1fr) 48px 100px 100px 60px 116px; gap: 12px; }
+  .thead, .row { grid-template-columns: minmax(0, 1fr) 48px 60px 100px 100px 60px 116px; gap: 12px; }
 }
 
 @media (max-width: 960px) {
@@ -370,10 +407,10 @@ a:hover { text-decoration: underline; }
   .cards { grid-template-columns: minmax(0, 1fr); }
   .top { padding: 20px 16px 8px; }
   .table { overflow-x: auto; }
-  .thead, .row, .detail { min-width: 660px; }
+  .thead, .row, .detail { min-width: 730px; }
   .thead { padding: 14px 16px 10px; }
   .row { padding: 0 16px; }
-  .thead, .row { grid-template-columns: minmax(140px, 1fr) 48px 100px 100px 60px 110px; gap: 12px; }
+  .thead, .row { grid-template-columns: minmax(140px, 1fr) 48px 60px 100px 100px 60px 110px; gap: 12px; }
   .detail { padding-left: 16px; }
   .more { padding: 16px; }
 }

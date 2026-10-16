@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Azeret+Mono:wght@400;500;600&display=swap">
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
-  <link rel="stylesheet" href="style.css?v=3a55d376e4">
+  <link rel="stylesheet" href="style.css?v=ef1b09f253">
 </head>
 <body>
   <div class="app">
@@ -51,10 +51,23 @@
         <label class="row-between">AH cut
           <span class="cut"><input id="cut" class="cut-input" type="text" inputmode="decimal" value="5">%</span>
         </label>
+        <div class="row-between">
+          <label class="check" title="The deposit is lost if the item doesn't sell, and refunded if it does"><input id="deposit" type="checkbox">Include AH deposit</label>
+          <select id="duration" class="select select-sm" aria-label="Auction length" hidden>
+            <option value="12">12h</option>
+            <option value="24">24h</option>
+            <option value="48">48h</option>
+          </select>
+        </div>
         <label class="check"><input id="craftMats" type="checkbox" checked>Craft reagents when cheaper</label>
+      </div>
+
+      <div class="group pricing">
+        <span class="label">Filters</span>
         <label class="check"><input id="onlyProfit" type="checkbox">Profitable only</label>
         <label class="check"><input id="showUnpriced" type="checkbox">Show unpriced recipes</label>
         <label class="check" title="Items with only 1 or 2 listed: one seller sets the price, so it may not hold"><input id="hideFew" type="checkbox">Hide few listed</label>
+        <label class="check" title="Hides recipes that come from drops, vendors or quests. Recipes with an unknown source stay listed."><input id="trainerOnly" type="checkbox">Trainer recipes only</label>
       </div>
 
       <button id="theme" class="theme-btn" type="button"></button>
@@ -66,10 +79,18 @@
         <div class="cards" id="cards"></div>
       </section>
 
-      <div class="table">
+      <div class="view-tabs" id="viewTabs" role="tablist" hidden>
+        <button type="button" role="tab" data-view="recipes">Recipes</button>
+        <button type="button" role="tab" data-view="level">Cheapest leveling path</button>
+      </div>
+
+      <section class="level" id="level" hidden></section>
+
+      <div class="table" id="table">
         <div class="thead" id="thead">
           <button data-sort="name">Recipe</button>
           <button data-sort="qty" class="num">On AH</button>
+          <button data-sort="sold" class="num" title="Estimated units sold per day, from comparing scans">Sold/day</button>
           <button data-sort="sell" class="num">Sells for</button>
           <button data-sort="cost" class="num">Cost</button>
           <button data-sort="margin" class="num">Margin</button>
@@ -81,6 +102,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=ad599b40af"></script>
+  <script src="app.js?v=585ab8c0b9"></script>
 </body>
 </html>

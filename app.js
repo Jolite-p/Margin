@@ -833,55 +833,9 @@ function renderView(all) {
   $("viewTabs").hidden = false;
   $("level").hidden = state.view !== "level";
   $("cooldowns").hidden = state.view !== "cooldowns";
-  $("flip").hidden = state.view !== "flip";
   $("table").hidden = state.view !== "recipes";
   if (state.view === "level") renderLevel();
   if (state.view === "cooldowns") renderCooldowns(all);
-  if (state.view === "flip") renderFlip();
-}
-
-// ---------------------------------------------------------------- vendor flip
-
-// Items listed on the AH for less than a vendor pays for them: buy them out, sell them to a vendor.
-// Uses the scan's price steps to count how many are under the vendor price; scans from before the
-// addon saved steps only know the cheapest price, so the amount there is unknown.
-function renderFlip() {
-  const rl = realm();
-  if (!rl) { $("flip").innerHTML = `<div class="level-intro">No scan yet.</div>`; return; }
-  const q = $("search").value.trim().toLowerCase();
-  const info = (id) => {
-    const a = state.items[id], b = state.prices?.items?.[id];
-    return a || b ? { ...b, ...a, icon: a?.icon || b?.icon } : null;
-  };
-  const rows = [];
-  for (const [id, p] of Object.entries(rl.prices)) {
-    const it = info(id), sell = it?.sell || 0;
-    if (!sell || p[0] >= sell || (q && !(it.name || "").toLowerCase().includes(q))) continue;
-    let units = null, profit = sell - p[0];
-    if (rl.depth?.[id]) {
-      const d = rl.depth[id];
-      units = 0; profit = 0;
-      for (let i = 0; i < d.length; i += 2) if (d[i] < sell) { units += d[i + 1]; profit += (sell - d[i]) * d[i + 1]; }
-    }
-    rows.push({ id, it, p, sell, units, profit });
-  }
-  rows.sort((a, b) => b.profit - a.profit);
-  const intro = `<div class="level-intro">Items on the AH right now for less than a vendor pays for them, from the latest scan.
-    Buy them out and sell them to any vendor; there's no AH cut on buying.${rows.some((x) => x.units == null)
-      ? " This scan only has each item's cheapest price, so Profit is per item until your next scan." : ""}</div>`;
-  if (!rows.length) { $("flip").innerHTML = intro + `<div class="level-intro">Nothing is under its vendor price${q ? " for that search" : ""}.</div>`; return; }
-  $("flip").innerHTML = intro + `
-    <div class="flip-row head"><span>Item</span><span class="num">Cheapest</span><span class="num">Vendor pays</span><span class="num">Under vendor</span><span class="num">Profit</span></div>
-    ${rows.map(({ id, it, p, sell, units, profit }) => {
-      const qc = qColor(it.quality ?? 1);
-      return `<div class="flip-row">
-        <span class="recipe-name"><a class="icon-link" href="${WH}/item=${id}" target="_blank" rel="noopener" data-tip="item:${id}"><img class="row-icon" src="${ICON(it.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
-          <span style="color:${qc}">${esc(it.name || "Item " + id)}</span></span>
-        <span class="num">${money(p[0])}</span>
-        <span class="num">${money(sell)}</span>
-        <span class="num mono">${units == null ? "?" : units}</span>
-        <span class="num"><span class="p-pos">${money(profit)}</span>${units == null ? `<span class="muted"> each</span>` : ""}</span></div>`;
-    }).join("")}`;
 }
 
 // ---------------------------------------------------------------- cooldowns
@@ -972,7 +926,7 @@ function readURL() {
   const u = new URLSearchParams(location.search);
   const prof = u.get("prof");
   if (prof) state.profession = prof === "favorites" ? FAV : Object.keys(state.profCounts).find((p) => slug(p) === slug(prof)) || null;
-  if (["level", "cooldowns", "flip"].includes(u.get("view"))) state.view = u.get("view");
+  if (["level", "cooldowns"].includes(u.get("view"))) state.view = u.get("view");
   if (RESULT_MODES[u.get("results")]) state.levelMode = u.get("results");
   if (DEPOSIT_RATE[u.get("deposit")]) { $("deposit").checked = true; $("duration").value = u.get("deposit"); $("duration").hidden = false; }
   if (u.get("q")) $("search").value = u.get("q");
@@ -988,7 +942,7 @@ function writeURL() {
   const u = new URLSearchParams();
   if (state.profession) u.set("prof", state.profession === FAV ? "favorites" : slug(state.profession));
   if (state.view === "level" && state.profession && state.profession !== FAV) u.set("view", "level");
-  if (state.view === "cooldowns" || state.view === "flip") u.set("view", state.view);
+  if (state.view === "cooldowns") u.set("view", state.view);
   if (state.levelMode !== "vendor") u.set("results", state.levelMode);
   if ($("deposit").checked) u.set("deposit", $("duration").value);
   const q = $("search").value.trim();
@@ -1124,7 +1078,7 @@ function tipHTML(kind, id) {
     return tipHeader(it.icon || r.icon, pid ? it.name || r.name : r.name, pid ? it.quality : 1, sub) + body +
       `<div class="tip-foot">Click to open ${url.replace("https://www.", "")}</div>`;
   }
-  // a plain item, e.g. a reagent, or anything else on the AH (vendor flip)
+  // a plain item, e.g. a reagent, or anything else on the AH
   const it = state.items[id] || state.prices?.items?.[id] || {};
   const best = resolve(id);
   const how = best ? { AH: "Auction House", Vendor: "Vendor", Craft: "Craft it" }[best.src] : null;

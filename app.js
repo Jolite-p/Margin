@@ -214,7 +214,6 @@ const SORT = {
 function render() {
   const o = opts();
   const all = evaluateAll(o).filter((x) => !tooThin(x) || isFav(x.r.id));
-  const top = renderCards(all.filter((x) => x.profit != null));
 
   // without a scan nothing has a price, so list every recipe rather than an empty table
   const showUnpriced = o.showUnpriced || !realm();
@@ -240,9 +239,11 @@ function render() {
     if (kb == null) return -1;
     return (typeof ka === "string" ? ka.localeCompare(kb) : ka - kb) * dir || (b.profit ?? 0) - (a.profit ?? 0);
   });
-  // ranked by profit, the top three are the cells above, so the table goes on from rank 4
+  // the top three are the table's three most profitable, so they follow every filter; ranked by
+  // profit, the table goes on from rank 4
+  const top = renderCards(rows);
   const rank = new Map(rows.map((x, i) => [x.r.id, i + 1]));
-  if (state.sort.key === "profit" && dir < 0 && state.profession !== FAV) {
+  if (state.sort.key === "profit" && dir < 0) {
     const shown = new Set(top.map((x) => x.r.id));
     rows = rows.filter((x) => !shown.has(x.r.id));
   }
@@ -291,7 +292,7 @@ function render() {
   renderView(all);
 }
 
-// Top 3 positive-profit recipes, ignoring sidebar filters.
+// Top 3 positive-profit recipes of the table's (filtered) rows.
 function renderCards(all) {
   const top = all.filter((x) => x.profit > 0 && !tooThin(x)).sort((a, b) => b.profit - a.profit).slice(0, 3);
   const box = $("cards");

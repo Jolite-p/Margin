@@ -1,15 +1,11 @@
-// ChudsForever front end: joins Wowhead recipe data with the addon's AH scan.
+// Margin front end: joins Wowhead recipe data with the addon's AH scan.
 const WH = "https://www.wowhead.com/forever";
 const ICON = (name) => `https://wow.zamimg.com/images/wow/icons/medium/${name && name !== "temp" ? name : "inv_misc_questionmark"}.jpg`;
 const QUALITY = ["poor", "common", "uncommon", "rare", "epic", "legendary"];
 const qColor = (q) => `var(--q-${QUALITY[q] ?? "common"})`;
 const PAGE = 100;
-const ANIM_ROWS = 20;        // rows that cascade in and count up; the rest render instantly
-const ROW_STAGGER = 18;      // ms between rows in the cascade
-const COUNT_MS = 500;        // count-up duration
 const FEW = 3;               // fewer listed than this and one seller sets the price
 const STALE_H = 24;          // scans older than this get a warning
-const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
 const FAV = "__fav";         // the Favorites entry in the profession list
 // Modern AH deposit: this share of the item's vendor sell price per auction length (hours).
@@ -36,10 +32,6 @@ const state = {
   levelMode: "vendor",       // what the leveling path does with leftover results: vendor, de or ah
   sort: { key: "profit", dir: -1 },
   shown: PAGE, open: new Set(),
-  cascade: 0,                // bumps when the row cascade should replay
-  lastCascade: -1,
-  shownProfit: new Map(),    // recipe id -> last displayed profit, for count-up
-  cardKey: "",
 };
 const $ = (id) => document.getElementById(id);
 const opts = () => ({
@@ -118,27 +110,6 @@ function scanTime(t) {
   if (diff === 0) return `Today ${hm}`;
   if (diff === 1) return `Yesterday ${hm}`;
   return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${hm}`;
-}
-
-// ---------------------------------------------------------------- count-up
-
-const tweens = new WeakMap();
-function countUp(el, from, to, delay) {
-  const t = tweens.get(el);
-  if (t) { cancelAnimationFrame(t.raf); clearTimeout(t.done); }
-  if (reduceMotion.matches || document.hidden || from === to) { el.innerHTML = money(to); return; }
-  const t0 = performance.now();
-  const tw = {};
-  el.innerHTML = money(from);
-  const step = (now) => {
-    const k = Math.max(0, Math.min(1, (now - t0 - delay) / COUNT_MS));
-    el.innerHTML = money(from + (to - from) * (1 - Math.pow(1 - k, 3)));
-    if (k < 1) tw.raf = requestAnimationFrame(step);
-  };
-  tw.raf = requestAnimationFrame(step);
-  // frames can be paused (background tab); make sure the real number always lands
-  tw.done = setTimeout(() => { cancelAnimationFrame(tw.raf); el.innerHTML = money(to); }, delay + COUNT_MS + 100);
-  tweens.set(el, tw);
 }
 
 // ---------------------------------------------------------------- pricing
@@ -243,7 +214,7 @@ const SORT = {
 function render() {
   const o = opts();
   const all = evaluateAll(o).filter((x) => !tooThin(x) || isFav(x.r.id));
-  renderCards(all.filter((x) => x.profit != null));
+  const top = renderCards(all.filter((x) => x.profit != null));
 
   // without a scan nothing has a price, so list every recipe rather than an empty table
   const showUnpriced = o.showUnpriced || !realm();
@@ -269,10 +240,12 @@ function render() {
     if (kb == null) return -1;
     return (typeof ka === "string" ? ka.localeCompare(kb) : ka - kb) * dir || (b.profit ?? 0) - (a.profit ?? 0);
   });
-
-  const replay = state.cascade !== state.lastCascade && !reduceMotion.matches;
-  state.lastCascade = state.cascade;
-  const anim = state.cascade % 2 ? "in-b" : "in-a";
+  // ranked by profit, the top three are the cells above, so the table goes on from rank 4
+  const rank = new Map(rows.map((x, i) => [x.r.id, i + 1]));
+  if (state.sort.key === "profit" && dir < 0 && state.profession !== FAV) {
+    const shown = new Set(top.map((x) => x.r.id));
+    rows = rows.filter((x) => !shown.has(x.r.id));
+  }
 
   const html = [];
   const visible = rows.slice(0, state.shown);
@@ -280,21 +253,21 @@ function render() {
     const r = x.r, open = state.open.has(r.id);
     const product = r.creates ? state.items[r.creates[0]] : null;
     const qc = qColor(product ? product.quality : 1);
-    // every row animates so none shows before the rows above it; past ANIM_ROWS they arrive together
-    const delay = replay ? `style="animation-delay:${Math.min(i, ANIM_ROWS) * ROW_STAGGER}ms"` : "";
-    html.push(`<div class="row${replay ? " " + anim : ""}${open ? " open" : ""}" data-id="${r.id}" ${delay}>
+    html.push(`<div class="row${open ? " open" : ""}" data-id="${r.id}">
+      <div class="rank">${rank.get(r.id)}</div>
       <div class="recipe">
-        <button type="button" class="fav${isFav(r.id) ? " on" : ""}" data-fav="${r.id}" aria-label="${isFav(r.id) ? "Remove from" : "Add to"} favorites" aria-pressed="${isFav(r.id)}">★</button>
         <a class="icon-link" href="${WH}/${r.creates ? "item=" + r.creates[0] : "spell=" + r.id}" target="_blank" rel="noopener" data-tip="recipe:${r.id}" aria-label="${esc(r.name)} on Wowhead"><img class="row-icon" src="${ICON(product?.icon || r.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
-        <span class="recipe-name" role="button" tabindex="0" aria-expanded="${open}" style="color:${qc}">${esc(r.name)}${r.creates && r.creates[1] !== 1 ? ` <span class="recipe-meta">×${r.creates[1]}</span>` : ""}</span>
-        <span class="recipe-meta">${esc(r.profession)} · <span class="mono">${r.skill ?? "?"}</span></span>
+        <span class="recipe-name" role="button" tabindex="0" aria-expanded="${open}" style="color:${qc}">${esc(r.name)}</span>
+        ${r.creates && r.creates[1] !== 1 ? `<span class="recipe-n">×${r.creates[1]}</span>` : ""}
+        <span class="recipe-meta">${esc(r.profession)} · ${r.skill ?? "?"}</span>
       </div>
       <div class="num cell-mono${isFew(x) ? " few" : ""}" title="${isFew(x) ? `Only ${x.qty} listed: one seller sets this price, so it may not hold` : ""}">${x.qty ?? ""}</div>
       <div class="num cell-mono muted">${fmtSold(x.sold)}</div>
       <div class="num cell-sm" title="${x.viaVendor ? "Selling to a vendor pays more than the AH" : ""}">${money(x.sell)}${x.viaVendor && realm() ? `<div class="tag-line">vendor</div>` : ""}</div>
-      <div class="num cell-sm">${money(x.cost.complete ? x.cost.total : null)}</div>
+      <div class="num cell-sm muted">${money(x.cost.complete ? x.cost.total : null)}</div>
       <div class="num cell-mono muted">${pct(x.margin)}</div>
-      <div class="num ${x.profit == null ? "muted" : x.profit > 0 ? "p-pos" : "p-neg"}"><span class="pv" data-i="${i}">${money(x.profit)}</span></div>
+      <div class="num ${x.profit == null ? "muted" : x.profit > 0 ? "p-pos" : "p-neg"}">${money(x.profit)}</div>
+      <button type="button" class="fav${isFav(r.id) ? " on" : ""}" data-fav="${r.id}" aria-label="${isFav(r.id) ? "Remove from" : "Add to"} favorites" aria-pressed="${isFav(r.id)}">★</button>
     </div>`);
     if (open) html.push(detail(x, o));
   });
@@ -302,16 +275,6 @@ function render() {
     `<div class="empty">${state.profession === FAV && !favCount() ? "Star a recipe with ★ to keep it here."
       : realm() ? "No priced recipes match these filters in this scan." : "Scan the Auction House in game to see profits."}</div>`;
 
-  // count-up: from 0 when rows (re)mount, from the previous value when a setting changes
-  const els = $("rows").querySelectorAll(".pv");
-  visible.forEach((x, i) => {
-    const prev = state.shownProfit.get(x.r.id);
-    if (i < ANIM_ROWS && x.profit != null) {
-      const from = replay ? 0 : prev ?? x.profit;
-      countUp(els[i], from, x.profit, replay ? i * ROW_STAGGER : 0);
-    }
-  });
-  state.shownProfit = new Map(visible.map((x) => [x.r.id, x.profit]));
 
   const left = rows.length - visible.length;
   $("more").innerHTML = rows.length
@@ -323,7 +286,7 @@ function render() {
   document.querySelectorAll("#thead button").forEach((b) => {
     const on = b.dataset.sort === state.sort.key;
     b.classList.toggle("on", on);
-    b.textContent = b.textContent.replace(/ [↓↑]$/, "") + (on ? (state.sort.dir < 0 ? " ↓" : " ↑") : "");
+    b.textContent = b.textContent.replace(/ [▾▴]$/, "") + (on ? (state.sort.dir < 0 ? " ▾" : " ▴") : "");
   });
   renderView(all);
 }
@@ -331,36 +294,28 @@ function render() {
 // Top 3 positive-profit recipes, ignoring sidebar filters.
 function renderCards(all) {
   const top = all.filter((x) => x.profit > 0 && !tooThin(x)).sort((a, b) => b.profit - a.profit).slice(0, 3);
-  const key = top.map((x) => x.r.id).join(",") + "|" + state.realmKey;
   const box = $("cards");
   if (!top.length) {
-    state.cardKey = key;
     box.innerHTML = `<div class="empty-card">${realm() ? "Nothing is profitable with the current settings." : "No scan yet."}</div>`;
-    return;
+    return top;
   }
-  const rebuild = key !== state.cardKey;
-  if (rebuild) {
-    state.cardKey = key;
-    box.innerHTML = top.map((x, i) => {
-      const it = state.items[x.r.creates[0]] || {};
-      return `<div class="card" style="animation-delay:${i * 90}ms">
-        <div class="card-head">
-          <a class="icon-link" href="${WH}/item=${x.r.creates[0]}" target="_blank" rel="noopener" data-tip="recipe:${x.r.id}" aria-label="${esc(x.r.name)} on Wowhead"><img class="card-icon" src="${ICON(it.icon)}" alt="" style="--q:${qColor(it.quality)}"></a>
+  const stat = (label, value, cls = "") => `<div class="stat"><span class="stat-label">${label}</span><span class="stat-value${cls}">${value}</span></div>`;
+  box.innerHTML = top.map((x, i) => {
+    const it = state.items[x.r.creates[0]] || {};
+    return `<div class="card">
+      <div class="card-head">
+        <span class="badge${i === 0 ? " first" : ""}">${i + 1}</span>
+        <a class="icon-link" href="${WH}/item=${x.r.creates[0]}" target="_blank" rel="noopener" data-tip="recipe:${x.r.id}" aria-label="${esc(x.r.name)} on Wowhead"><img class="card-icon" src="${ICON(it.icon)}" alt=""></a>
+        <div class="card-title">
           <a class="card-name" href="${WH}/item=${x.r.creates[0]}" target="_blank" rel="noopener" style="color:${qColor(it.quality)}">${esc(x.r.name)}</a>
+          <span class="card-prof">${esc(x.r.profession)}</span>
         </div>
-        <div class="card-profit" data-v></div>
-        <div class="card-foot"><span data-f></span><span class="mono" data-m></span></div>
-      </div>`;
-    }).join("");
-  }
-  box.querySelectorAll(".card").forEach((card, i) => {
-    const x = top[i], el = card.querySelector("[data-v]");
-    const prev = rebuild ? 0 : Number(el.dataset.v);
-    el.dataset.v = x.profit;
-    countUp(el, prev, x.profit, rebuild ? i * 90 : 0);
-    card.querySelector("[data-f]").innerHTML = `${esc(x.r.profession)} · <span class="mono${isFew(x) ? " few" : ""}">${x.qty}</span> on AH`;
-    card.querySelector("[data-m]").textContent = pct(x.margin);
-  });
+      </div>
+      <div class="card-profit">${money(x.profit)}</div>
+      <div class="stats">${stat("On AH", x.qty ?? "—", isFew(x) ? " few" : "")}${stat("Sold/day", fmtSold(x.sold) || "—")}${stat("Margin", pct(x.margin) || "—")}</div>
+    </div>`;
+  }).join("");
+  return top;
 }
 
 function detail(x, o) {
@@ -981,13 +936,14 @@ function renderProfs() {
   const nav = $("profs");
   nav.querySelectorAll(".prof").forEach((b) => b.remove());
   nav.insertAdjacentHTML("beforeend", list.map(([name, n, val]) =>
-    `<button type="button" class="prof${state.profession === val ? " on" : ""}" data-prof="${esc(val ?? "")}">${esc(name)}<span class="n">${n.toLocaleString("en-US")}</span></button>`
+    `<button type="button" class="prof${state.profession === val ? " on" : ""}" data-prof="${esc(val ?? "")}"><span class="mark"></span>${esc(name)}<span class="n">${n.toLocaleString("en-US")}</span></button>`
   ).join(""));
 }
 
 function renderScan() {
   const box = $("scan");
   const p = state.prices;
+  $("realmBox").innerHTML = "";
   if (!p || p.error) {
     box.innerHTML = `<div class="scan-head"><span class="dot off"></span>Not connected</div>
       <span class="muted">${esc(p?.error || "Loading…")}</span>`;
@@ -999,20 +955,23 @@ function renderScan() {
     // visitors of the hosted site can't scan for it, so they only get the status
     box.innerHTML = HOSTED ? `<div class="scan-head"><span class="dot off"></span>No scans yet</div>`
       : `<div class="scan-head"><span class="dot off"></span>No scan found yet</div>
-      <span class="muted">In game, open the Auction House, click <b>ChudsForever Scan</b>, then <b>Save</b> or <code>/reload</code>.</span>`;
+      <span class="muted">In game, open the Auction House, click <b>Margin Scan</b>, then <b>Save</b> or <code>/reload</code>.</span>`;
     return;
   }
   if (!state.realmKey || !p.realms[state.realmKey]) state.realmKey = realms[0][0];
   const r = p.realms[state.realmKey];
   const ageH = (Date.now() / 1000 - r.time) / 3600;
   const age = ageH < 48 ? `${Math.floor(ageH)} hours` : `${Math.floor(ageH / 24)} days`;
-  box.innerHTML = `<div class="scan-head"><span class="dot${ageH > STALE_H ? " stale" : ""}"></span>Scan · ${scanTime(r.time)}</div>
-    ${ageH > STALE_H ? `<span class="stale-text">Prices are ${age} old and may have changed.</span>` : ""}
-    <span class="muted">${r.auctions.toLocaleString("en-US")} auctions · ${esc(state.realmKey)}</span>
-    ${realms.length > 1 ? `<select id="realm" class="select" aria-label="Realm">${realms.map(([k]) =>
-      `<option value="${esc(k)}"${k === state.realmKey ? " selected" : ""}>${esc(k)}</option>`).join("")}</select>` : ""}`;
+  box.innerHTML = `<div class="scan-head"><span class="dot${ageH > STALE_H ? " stale" : ""}"></span>${scanTime(r.time)}
+      <span class="faint">/</span><span class="gold">${r.auctions.toLocaleString("en-US")}</span><span class="muted">auctions</span></div>
+    ${ageH > STALE_H ? `<span class="stale-text">Prices are ${age} old and may have changed.</span>` : ""}`;
+  // the realm reads like a button; with one realm there is nothing to pick
+  $("realmBox").innerHTML = `<label class="realm${realms.length > 1 ? "" : " one"}"><span class="realm-label">Realm</span>
+    <span class="realm-name">${esc(state.realmKey)}</span>${realms.length > 1 ? `<span class="realm-caret">▾</span>
+    <select id="realm" aria-label="Realm">${realms.map(([k]) =>
+      `<option value="${esc(k)}"${k === state.realmKey ? " selected" : ""}>${esc(k)}</option>`).join("")}</select>` : ""}</label>`;
   const sel = $("realm");
-  if (sel) sel.onchange = () => { state.realmKey = sel.value; state.cascade++; renderScan(); render(); };
+  if (sel) sel.onchange = () => { state.realmKey = sel.value; renderScan(); render(); };
 }
 
 // ---------------------------------------------------------------- shareable links
@@ -1083,12 +1042,11 @@ async function loadPrices() {
     state.cfFavs = new Set(data.mine?.favs || []);
     state.recipeBuy = data.mine?.recipeBuy || {};
     renderProfs();
-    state.cascade++;   // a new scan remounts the rows
     // the history gains a point with each new scan; without it the trend lines just stay hidden
     try { state.history = await (await fetch(DATA.history())).json(); } catch (e) { state.history = null; }
   } catch (e) {
     if (state.prices?.error) return;
-    state.prices = { error: HOSTED ? "Couldn't load the prices. Try refreshing." : "Can't reach the ChudsForever server. Is start.bat running?" };
+    state.prices = { error: HOSTED ? "Couldn't load the prices. Try refreshing." : "Can't reach the Margin server. Is start.bat running?" };
     state.pricesMtime = -1;
   }
   renderScan();
@@ -1246,7 +1204,7 @@ addEventListener("scroll", () => { tip.hidden = true; tipFor = null; }, { passiv
 
 // ---------------------------------------------------------------- events
 
-function refilter() { state.shown = PAGE; state.cascade++; render(); }
+function refilter() { state.shown = PAGE; render(); }
 
 function copyText(btn, text, label) {
   navigator.clipboard.writeText(text).then(() => {
@@ -1326,7 +1284,6 @@ $("viewTabs").addEventListener("click", (e) => {
   const b = e.target.closest("[data-view]");
   if (!b || b.dataset.view === state.view) return;
   state.view = b.dataset.view;
-  if (state.view === "recipes") state.cascade++;
   render();
 });
 $("level").addEventListener("input", (e) => {

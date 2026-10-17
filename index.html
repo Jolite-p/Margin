@@ -3,31 +3,34 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ChudsForever</title>
+  <title>Margin</title>
   <script>
     try { const t = localStorage.getItem("cf-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Azeret+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap">
   <link rel="icon" type="image/png" href="favicon.png?v=79615db9a3">
   <link rel="icon" href="favicon.ico?v=212200aaed" sizes="16x16 32x32 48x48">
-  <link rel="stylesheet" href="style.css?v=cd610f8545">
+  <link rel="stylesheet" href="style.css?v=00bbe01e0e">
 </head>
 <body>
   <div class="app">
     <aside class="side">
       <div class="brand">
-        <img class="brand-cat" src="cat-logo.png?v=15cb003bbb" alt="" width="48" height="48">
+        <span class="avatar"><img src="cat-logo.png?v=15cb003bbb" alt="" width="40" height="40"></span>
         <div class="brand-text">
-          <span class="brand-name">ChudsForever</span>
+          <span class="brand-name">Margin</span>
           <span class="brand-sub">Your AH scans</span>
         </div>
       </div>
 
       <div class="scan" id="scan"></div>
 
-      <input id="search" class="search" type="search" placeholder="Search…" aria-label="Search recipes" autocomplete="off">
+      <div class="find">
+        <div id="realmBox"></div>
+        <input id="search" class="search" type="search" placeholder="Search…" aria-label="Search recipes" autocomplete="off">
+      </div>
 
       <nav class="group profs" id="profs" aria-label="Profession">
         <span class="label">Profession</span>
@@ -86,22 +89,23 @@
     </aside>
 
     <main class="main">
-      <section class="top">
-        <h2 class="top-title">Most profitable right now</h2>
-        <div class="cards" id="cards"></div>
-      </section>
-
       <div class="view-tabs" id="viewTabs" role="tablist" hidden>
         <button type="button" role="tab" data-view="recipes">Recipes</button>
         <button type="button" role="tab" data-view="level">Profession leveling</button>
         <button type="button" role="tab" data-view="cooldowns">Cooldowns</button>
       </div>
 
+      <section class="top">
+        <h2 class="label top-title">Most profitable right now</h2>
+        <div class="cards" id="cards"></div>
+      </section>
+
       <section class="level" id="level" hidden></section>
       <section class="level" id="cooldowns" hidden></section>
 
       <div class="table" id="table">
         <div class="thead" id="thead">
+          <span class="rank">#</span>
           <button data-sort="name">Recipe</button>
           <button data-sort="qty" class="num">On AH</button>
           <button data-sort="sold" class="num" title="Estimated units sold per day, from comparing scans">Sold/day</button>
@@ -109,6 +113,7 @@
           <button data-sort="cost" class="num">Cost</button>
           <button data-sort="margin" class="num">Margin</button>
           <button data-sort="profit" class="num">Profit</button>
+          <span></span>
         </div>
         <div id="rows"></div>
         <div id="more" class="more"></div>
@@ -116,6 +121,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=622aef442c"></script>
+  <script src="app.js?v=ce56165d0f"></script>
 </body>
 </html>

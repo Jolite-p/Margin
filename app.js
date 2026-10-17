@@ -28,6 +28,10 @@ const state = {
   profession: null,
   make: new Map(),           // recipe id -> how many to craft, for the shopping list
   favs: new Set(loadSaved("cf-favs", [])),   // starred recipe ids, kept in the visitor's browser
+  cfFavs: new Set(),         // the ones starred in /cf (the local site only: the server reads them)
+  recipeItems: {},           // recipe id -> [item that teaches it, vendor sells it, its sell price, BoP]
+  recipeBuy: {},             // what you've seen recipe items cost at vendors (the local site only)
+  levelSrc: "trainer,boe",   // where the leveling path may get recipes from, as in /cf
   view: "recipes",           // or "level", the cheapest leveling path for the chosen profession
   levelMode: "vendor",       // what the leveling path does with leftover results: vendor, de or ah
   sort: { key: "profit", dir: -1 },
@@ -46,6 +50,8 @@ const opts = () => ({
   showUnpriced: $("showUnpriced").checked,
   hideFew: $("hideFew").checked,
   trainerOnly: $("trainerOnly").checked,
+  marginMode: $("marginMode").value,
+  marginPct: Number(String($("marginPct").value).replace(",", ".")),
   deposit: $("deposit").checked ? DEPOSIT_RATE[$("duration").value] : 0,
   q: $("search").value.trim().toLowerCase(),
 });
@@ -62,6 +68,30 @@ function tooThin(x) {
 // Wowhead source 6 = trainer. Recipes it lists only as drop/vendor/quest are "not trainer";
 // many WoW Forever recipes have no source at all, and those count as learnable.
 const isTrainer = (r) => !r.source?.length || r.source.includes(6) || !!r.trainingcost;
+const isFav = (id) => state.favs.has(id) || state.cfFavs.has(id);
+const favCount = () => new Set([...state.favs, ...state.cfFavs]).size;
+
+// What learning a recipe costs, and where (the same as /cf, which also counts ones you know as
+// free; the site can't tell which you know): the trainer's fee; for a BoE recipe item, that item
+// from the AH or a vendor; a BoP one (or one from a quest, a drop or reputation) you earn
+// yourself, so it's free. src is the set of sources allowed. null when it can't be had that way.
+const RECIPE_SOURCES = { trainer: "Trainer", boe: "BoE", bop: "BoP" };
+function learnCost(r, o, src) {
+  if (isTrainer(r)) return src.has("trainer") ? { cost: r.trainingcost || 0, how: "trainer" } : null;
+  const ri = state.recipeItems[r.id];
+  if (!ri) return src.has("bop") ? { cost: 0, how: "bop" } : null;
+  const [item, vendor, sell, bop] = ri;
+  if (bop) return src.has("bop") ? { cost: 0, how: "bop", item } : null;
+  if (!src.has("boe")) return null;
+  let best = ahPrice(item, o), how = "ah";
+  if (vendor) {
+    // a vendor's price: what you saw it for, else Classic's usual 4x what a vendor pays for it
+    const seen = state.recipeBuy[item];
+    const each = seen ?? (sell > 0 ? Math.round(sell * 4 * vendorFactor()) : null);
+    if (each != null && (best == null || each < best)) { best = each; how = "vendor"; }
+  }
+  return best == null ? null : { cost: best, how, item };
+}
 
 // ---------------------------------------------------------------- formatting
 
@@ -212,22 +242,26 @@ const SORT = {
 
 function render() {
   const o = opts();
-  const all = evaluateAll(o).filter((x) => !tooThin(x) || state.favs.has(x.r.id));
+  const all = evaluateAll(o).filter((x) => !tooThin(x) || isFav(x.r.id));
   renderCards(all.filter((x) => x.profit != null));
 
   // without a scan nothing has a price, so list every recipe rather than an empty table
   const showUnpriced = o.showUnpriced || !realm();
-  const inView = state.profession === FAV ? (r) => state.favs.has(r.id)
+  const inView = state.profession === FAV ? (r) => isFav(r.id)
     : (r) => !state.profession || r.profession === state.profession;
-  let rows = all.filter((x) => (showUnpriced || x.profit != null || state.favs.has(x.r.id)) &&
+  let rows = all.filter((x) => (showUnpriced || x.profit != null || isFav(x.r.id)) &&
     inView(x.r) && matches(x.r, o.q));
   if (o.onlyProfit) rows = rows.filter((x) => x.profit > 0);
   if (o.trainerOnly) rows = rows.filter((x) => isTrainer(x.r));
   if (o.hideFew) rows = rows.filter((x) => !isFew(x));
+  // the Margin filter, as in /cf: at least or at most a percentage (no margin, no match)
+  if (o.marginMode !== "any" && $("marginPct").value.trim() !== "" && isFinite(o.marginPct)) {
+    rows = rows.filter((x) => x.margin != null && (o.marginMode === "min" ? x.margin >= o.marginPct : x.margin <= o.marginPct));
+  }
   writeURL();
   const key = SORT[state.sort.key], dir = state.sort.dir;
   rows.sort((a, b) => {
-    const fa = state.favs.has(a.r.id), fb = state.favs.has(b.r.id);
+    const fa = isFav(a.r.id), fb = isFav(b.r.id);
     if (fa !== fb) return fa ? -1 : 1;   // starred recipes stay on top
     const ka = key(a), kb = key(b);
     if (ka == null && kb == null) return a.r.profession.localeCompare(b.r.profession) || (a.r.skill ?? 0) - (b.r.skill ?? 0);
@@ -250,7 +284,7 @@ function render() {
     const delay = replay ? `style="animation-delay:${Math.min(i, ANIM_ROWS) * ROW_STAGGER}ms"` : "";
     html.push(`<div class="row${replay ? " " + anim : ""}${open ? " open" : ""}" data-id="${r.id}" ${delay}>
       <div class="recipe">
-        <button type="button" class="fav${state.favs.has(r.id) ? " on" : ""}" data-fav="${r.id}" aria-label="${state.favs.has(r.id) ? "Remove from" : "Add to"} favorites" aria-pressed="${state.favs.has(r.id)}">★</button>
+        <button type="button" class="fav${isFav(r.id) ? " on" : ""}" data-fav="${r.id}" aria-label="${isFav(r.id) ? "Remove from" : "Add to"} favorites" aria-pressed="${isFav(r.id)}">★</button>
         <a class="icon-link" href="${WH}/${r.creates ? "item=" + r.creates[0] : "spell=" + r.id}" target="_blank" rel="noopener" data-tip="recipe:${r.id}" aria-label="${esc(r.name)} on Wowhead"><img class="row-icon" src="${ICON(product?.icon || r.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
         <span class="recipe-name" role="button" tabindex="0" aria-expanded="${open}" style="color:${qc}">${esc(r.name)}${r.creates && r.creates[1] !== 1 ? ` <span class="recipe-meta">×${r.creates[1]}</span>` : ""}</span>
         <span class="recipe-meta">${esc(r.profession)} · <span class="mono">${r.skill ?? "?"}</span></span>
@@ -265,7 +299,7 @@ function render() {
     if (open) html.push(detail(x, o));
   });
   $("rows").innerHTML = html.join("") ||
-    `<div class="empty">${state.profession === FAV && !state.favs.size ? "Star a recipe with ★ to keep it here."
+    `<div class="empty">${state.profession === FAV && !favCount() ? "Star a recipe with ★ to keep it here."
       : realm() ? "No priced recipes match these filters in this scan." : "Scan the Auction House in game to see profits."}</div>`;
 
   // count-up: from 0 when rows (re)mount, from the previous value when a setting changes
@@ -538,13 +572,13 @@ function resultValue(id, o, mode, unitCost = 0) {
 // again, so recipes that lean on them lose out where something else will do. Paths are ranked the
 // same way, so one that needs materials nobody is selling can't win on a made-up price.
 const MIN_CHANCE = 0.1, SCARCE_PENALTY = 10, SCARCE_ROUNDS = 4;
-function levelPath(prof, from, to, o, mode) {
+function levelPath(prof, from, to, o, mode, src) {
   const real = makeBuyResolver(o), scarce = new Map();
   let best = null;
   for (let round = 0; round < SCARCE_ROUNDS; round++) {
     const resolve = round ? makeBuyResolver(o, scarce) : real;
     let roundBest = null;
-    for (const plan of reusePasses(prof, from, to, o, mode, resolve, real)) {
+    for (const plan of reusePasses(prof, from, to, o, mode, resolve, real, src)) {
       if (!roundBest || plan.score < roundBest.score) roundBest = plan;
     }
     if (!best || roundBest.score < best.score) best = roundBest;
@@ -577,16 +611,21 @@ function scarcePrice(id, n, short, o) {
   return (cost + short * top * SCARCE_PENALTY) / n;
 }
 
-function* reusePasses(prof, from, to, o, mode, resolve, real) {
+function* reusePasses(prof, from, to, o, mode, resolve, real, src) {
   const caps = new Set((state.ranks[prof] || []).map((k) => k.cap));   // a new step starts after each
   const cands = state.recipes.filter((r) => r.profession === prof && r.colors && (!o.trainerOnly || isTrainer(r)))
     .map((r) => {
       const pid = r.creates?.[0];
       const yieldN = r.creates?.[1] || 0, cost = recipeCost(r, resolve);
+      const learn = learnCost(r, o, src);   // null: not from an allowed source
+      if (!cost.complete || !learn) return null;
       const unitCost = recipeCost(r, real).total / yieldN;
-      return { r, pid, yieldN, cost, value: pid ? resultValue(pid, o, mode, unitCost) : 0 };
+      // learning it is paid once: per skill point over the part of the range it can cover
+      const span = Math.max(1, Math.min(to, r.colors[3]) - Math.max(from, r.skill ?? 0));
+      return { r, pid, yieldN, cost, value: pid ? resultValue(pid, o, mode, unitCost) : 0,
+        learn: learn.cost, learnHow: learn.how, learnItem: learn.item, learnPer: learn.cost / span };
     })
-    .filter((c) => c.cost.complete);
+    .filter(Boolean);
 
   let demand = new Map();
   for (let pass = 0; pass < 6; pass++) {
@@ -602,7 +641,7 @@ function* reusePasses(prof, from, to, o, mode, resolve, real) {
         if (p <= 0) continue;
         let unit = c.value;
         if (c.pid && (demand.get(c.pid) || 0) > (made.get(c.pid) || 0)) unit = Math.max(unit, resolve(c.pid)?.price ?? 0);
-        const per = (c.cost.total - unit * c.yieldN) / p;
+        const per = (c.cost.total - unit * c.yieldN) / p + c.learnPer;
         if (mode !== "vendor" && p < MIN_CHANCE) { if (per < lowPer) { low = c; lowPer = per; } }
         else if (per < bestPer) { best = c; bestPer = per; }
       }
@@ -613,6 +652,15 @@ function* reusePasses(prof, from, to, o, mode, resolve, real) {
       if (last && last.c === best && !caps.has(s)) { last.to = s + 1; last.crafts += crafts; }
       else steps.push({ from: s, to: s + 1, c: best, crafts });
     }
+    // a bought recipe was charged its price spread over every point it could give; charge it
+    // over the points it actually got, so the next pass can drop one that only covers a few
+    const used = new Map();
+    for (const st of steps) if (st.c?.learn > 0) used.set(st.c, (used.get(st.c) || 0) + st.to - st.from);
+    let raised = false;
+    for (const [c, pts] of used) {
+      const per = c.learn / pts;
+      if (per > c.learnPer * 1.01) { c.learnPer = per; raised = true; }
+    }
     const next = new Map();
     for (const st of steps) {
       if (st.c) for (const [id, n] of st.c.r.reagents) next.set(id, (next.get(id) || 0) + n * Math.ceil(st.crafts));
@@ -620,7 +668,7 @@ function* reusePasses(prof, from, to, o, mode, resolve, real) {
     yield walkPath(steps, o, mode, resolve);
     const settled = next.size === demand.size && [...next].every(([k, v]) => demand.get(k) === v);
     demand = next;
-    if (settled) break;
+    if (settled && !raised) break;
   }
 }
 
@@ -701,12 +749,17 @@ function makeBulkBuyer(resolve, o) {
 function walkPath(steps, o, mode, resolve) {
   const stock = new Map(), madeBy = new Map(), bulk = makeBulkBuyer(resolve, o);
   let buy = 0, crafts = 0;
-  const fees = new Map();
+  const fees = new Map(), recipes = [];
   for (const st of steps) {
     if (!st.c) continue;
     const n = st.n = Math.ceil(st.crafts);
     crafts += n;
-    if (st.c.r.trainingcost) fees.set(st.c.r.id, st.c.r.trainingcost);
+    // (once per recipe item: two versions of a recipe can share one)
+    if (st.c.learn > 0) fees.set(st.c.learnItem || st.c.r.id, st.c.learn);
+    // a BoE recipe to buy: on the shopping list with the reagents
+    if (st.c.learnItem && (st.c.learnHow === "ah" || st.c.learnHow === "vendor") && !recipes.some((x) => x.item === st.c.learnItem)) {
+      recipes.push({ r: st.c.r, item: st.c.learnItem, cost: st.c.learn, how: st.c.learnHow });
+    }
     st.buy = 0; st.fromStock = []; st.toBuy = [];
     for (const { id, n: per, buy: b } of st.c.cost.parts) {
       const need = per * n, have = stock.get(id) || 0, use = Math.min(have, need);
@@ -736,7 +789,27 @@ function walkPath(steps, o, mode, resolve) {
   }
   const feeSum = [...fees.values()].reduce((a, b) => a + b, 0);
   const net = buy + feeSum - back;
-  return { steps, buy, back, crafts, fees: feeSum, net, score: net + bulk.penalty(), short: bulk.short, bought: bulk.bought };
+  return { steps, buy, back, crafts, fees: feeSum, net, recipes, score: net + bulk.penalty(), short: bulk.short, bought: bulk.bought };
+}
+
+// The search picks step by step, so more sources can now and then come out dearer: try leaving
+// each one out too, and keep the cheapest (a plan that leaves skill ranges without a recipe isn't
+// cheaper, it's unfinished). As /cf does; plans are kept until something they depend on changes.
+const planCache = new Map();
+function bestPlan(prof, from, to, o, mode, src) {
+  const key = [prof, from, to, mode, src.join(","), JSON.stringify(o), state.realmKey, state.pricesMtime, vendorFactor()].join("|");
+  if (planCache.has(key)) return planCache.get(key);
+  let plan = levelPath(prof, from, to, o, mode, new Set(src));
+  const gaps = (p) => p.steps.filter((st) => !st.c).length;
+  if (src.length > 1) {
+    for (const s of src) {
+      const alt = bestPlan(prof, from, to, o, mode, src.filter((x) => x !== s));
+      if (gaps(alt) < gaps(plan) || (gaps(alt) === gaps(plan) && alt.score < plan.score)) plan = alt;
+    }
+  }
+  if (planCache.size > 40) planCache.clear();
+  planCache.set(key, plan);
+  return plan;
 }
 
 function renderLevel() {
@@ -747,13 +820,16 @@ function renderLevel() {
       Yellow and green recipes count the extra crafts you need when a skill-up doesn't happen. Materials are bought
       through the AH listings cheapest first, so buying a lot costs what it really would. What you craft is
       used by later steps when they need it; the rest is handled the way you pick below.
-      Uses your filters (trainer recipes only, craft reagents, pricing). Shows when to train each rank, and its fee is in Trainer fees.</div>
+      Uses your filters (trainer recipes only, craft reagents, pricing). Shows when to train each rank.</div>
       <div class="level-controls">
         <label class="cut">Skill <input id="lvFrom" class="cut-input skill-input" type="text" inputmode="numeric" aria-label="From skill"></label>
         <label class="cut">to <input id="lvTo" class="cut-input skill-input" type="text" inputmode="numeric" aria-label="To skill"></label>
         <label class="cut">Leftover results
           <select id="lvMode" class="select">${Object.entries(RESULT_MODES).map(([k, v]) =>
             `<option value="${k}"${k === state.levelMode ? " selected" : ""}>${v}</option>`).join("")}</select></label>
+        <span class="cut" title="Trainer: for their fee. BoE: recipe items bought on the AH or from a vendor, priced in. BoP: drops, quests and reputation you get yourself, counted free. The plan uses the cheapest mix of what you allow.">Recipes from
+          ${Object.entries(RECIPE_SOURCES).map(([k, v]) =>
+            `<label class="check"><input type="checkbox" data-src="${k}"${state.levelSrc.split(",").includes(k) ? " checked" : ""}>${v}</label>`).join("")}</span>
         <button type="button" class="copy-btn" id="levelCopy">Copy shopping list</button>
       </div>
       <div id="levelBody"></div>`;
@@ -769,9 +845,10 @@ function renderLevel() {
   const from = Math.max(1, Number($("lvFrom").value) || 1);
   const to = Math.min(max, Number($("lvTo").value) || max);
   const o = opts(), mode = state.levelMode;
-  const plan = from < to ? levelPath(prof, from, to, o, mode) : null;
+  const src = Object.keys(RECIPE_SOURCES).filter((k) => state.levelSrc.split(",").includes(k));
+  const plan = from < to && src.length ? bestPlan(prof, from, to, o, mode, src) : null;
   state.levelPlan = plan;
-  if (!plan) { $("levelBody").innerHTML = `<div class="level-intro">Pick a skill range above.</div>`; return; }
+  if (!plan) { $("levelBody").innerHTML = `<div class="level-intro">${src.length ? "Pick a skill range above." : "Pick at least one place recipes can come from."}</div>`; return; }
 
   const name = (id) => esc(state.items[id]?.name || "Item " + id);
   const rankRow = (k) => `<div class="step rank"><span class="mono">${k.at}</span>
@@ -791,6 +868,8 @@ function renderLevel() {
     const notes = [];
     if (st.used > 0) notes.push(`<span class="mono">${fmtN(st.used)}</span> used by later steps`);
     for (const [id, n] of st.fromStock) notes.push(`uses <span class="mono">${fmtN(n)}</span> ${name(id)} you made`);
+    if (st.c.learnHow === "ah" || st.c.learnHow === "vendor") notes.push(`buy the recipe ${st.c.learnHow === "ah" ? "on the AH" : "from a vendor"} for ${money(st.c.learn)}`);
+    else if (st.c.learnHow === "bop") notes.push("recipe from a drop, quest or reputation");
     return `<div class="step">${range}
       <span class="step-craft"><span class="recipe-name"><a class="icon-link" href="${WH}/spell=${r.id}" target="_blank" rel="noopener" data-tip="recipe:${r.id}"><img class="row-icon" src="${ICON(it?.icon || r.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
         <span style="color:${qc}">${esc(r.name)}</span></span>
@@ -800,14 +879,16 @@ function renderLevel() {
       <span class="num">${money(st.buy)}</span></div>`;
   }
   const gaps = plan.steps.some((st) => !st.c);
-  const backLabel = { vendor: "Vendored back", de: "Disenchanted back", ah: "Sold on the AH" }[mode];
-  const stat = (label, value, cls = "", sub = "") => `<div class="stat${cls}"><span class="stat-label">${label}</span><span class="stat-value">${value}</span>${sub}</div>`;
+  // the summary, as in /cf: a row of facts, the cost or profit with its breakdown on hover
+  const HOW = { vendor: "vendoring", de: "disenchanting", ah: "selling on the AH" };
+  const fact = (label, value, attrs = "") => `<div class="fact"${attrs}><span class="fact-label">${label}</span><span class="fact-value">${value}</span></div>`;
+  const used = Object.entries(RECIPE_SOURCES).filter(([k]) => src.includes(k)).map(([, v]) => v).join(", ");
   $("levelBody").innerHTML = `
-    <div class="stats">
-      ${stat("Materials to buy", money(plan.buy))}
-      ${stat("Trainer fees", money(plan.fees))}
-      ${stat(backLabel, money(plan.back))}
-      ${stat(plan.net < 0 ? "Net profit" : "Net cost", money(Math.abs(plan.net)), " stat-main", `<span class="stat-sub">${plan.crafts.toLocaleString("en-US")} crafts</span>`)}
+    <div class="facts">
+      ${fact("Profession", `${esc(prof)} ${from}–${to}`)}
+      ${fact("Crafts", `<span class="mono">${plan.crafts.toLocaleString("en-US")}</span>`)}
+      ${fact(`${plan.net < 0 ? "Profit" : "Cost"}, ${HOW[mode]}`, (plan.net < 0 ? "+" : "") + money(Math.abs(plan.net)), ` data-tip="plan:0"`)}
+      ${fact("Recipes from", used)}
     </div>
     ${mode === "ah" ? `<div class="level-intro">Counts leftovers as sold at the scan price, after the AH cut. Items with fewer than ${AH_MIN_AUCTIONS} auctions up,
       or priced over ${AH_MAX_MARKUP}× what they cost to make, only count what a vendor pays. These are listings, not sales,
@@ -832,8 +913,10 @@ function levelShoppingText() {
   }
   const lines = [...need].sort((a, b) => b[1].cost - a[1].cost)
     .map(([id, e]) => `${fmtN(e.n)}× ${state.items[id]?.name || "Item " + id}${e.craft ? " (craft)" : ""}, ${plainMoney(e.cost)}`);
-  return [`${state.profession} ${$("lvFrom").value}–${$("lvTo").value}`, ...lines,
-    `Total: ${plainMoney(state.levelPlan?.buy || 0)}`].join("\n");
+  const recipes = (state.levelPlan?.recipes || []).map((x) =>
+    `1× ${state.items[x.item]?.name || "Recipe " + x.item} (${x.how === "ah" ? "AH" : "vendor"}), ${plainMoney(x.cost)}`);
+  return [`${state.profession} ${$("lvFrom").value}–${$("lvTo").value}`, ...lines, ...recipes,
+    `Total: ${plainMoney((state.levelPlan?.buy || 0) + (state.levelPlan?.recipes || []).reduce((a, x) => a + x.cost, 0))}`].join("\n");
 }
 
 function renderView(all) {
@@ -846,6 +929,7 @@ function renderView(all) {
     b.setAttribute("aria-selected", on);
   });
   $("viewTabs").hidden = false;
+  document.querySelector(".top").hidden = state.view !== "recipes";   // the top 3 belong to the recipe list, as in /cf
   $("level").hidden = state.view !== "level";
   $("cooldowns").hidden = state.view !== "cooldowns";
   $("table").hidden = state.view !== "recipes";
@@ -893,7 +977,7 @@ function renderCooldowns(all) {
 function renderProfs() {
   const total = Object.values(state.profCounts).reduce((a, b) => a + b, 0);
   const list = [["All", total, null], ...Object.keys(state.profCounts).sort().map((p) => [p, state.profCounts[p], p])];
-  if (state.favs.size || state.profession === FAV) list.splice(1, 0, ["★ Favorites", state.favs.size, FAV]);
+  if (favCount() || state.profession === FAV) list.splice(1, 0, ["★ Favorites", favCount(), FAV]);
   const nav = $("profs");
   nav.querySelectorAll(".prof").forEach((b) => b.remove());
   nav.insertAdjacentHTML("beforeend", list.map(([name, n, val]) =>
@@ -943,6 +1027,7 @@ function readURL() {
   if (prof) state.profession = prof === "favorites" ? FAV : Object.keys(state.profCounts).find((p) => slug(p) === slug(prof)) || null;
   if (["level", "cooldowns"].includes(u.get("view"))) state.view = u.get("view");
   if (RESULT_MODES[u.get("results")]) state.levelMode = u.get("results");
+  if (u.get("src") != null) state.levelSrc = u.get("src").split(",").filter((k) => RECIPE_SOURCES[k]).join(",");
   if (DEPOSIT_RATE[u.get("deposit")]) { $("deposit").checked = true; $("duration").value = u.get("deposit"); $("duration").hidden = false; }
   if (u.get("q")) $("search").value = u.get("q");
   const sort = u.get("sort");
@@ -951,6 +1036,8 @@ function readURL() {
   if (u.get("cut") != null) $("cut").value = u.get("cut");
   if (u.get("craft") === "0") $("craftMats").checked = false;
   for (const [k, id] of Object.entries(FLAGS)) if (u.get(k) === "1") $(id).checked = true;
+  const m = /^(min|max)(-?[0-9.]+)$/.exec(u.get("margin") || "");
+  if (m) { $("marginMode").value = m[1]; $("marginPct").value = m[2]; $("marginLimit").hidden = false; }
 }
 
 function writeURL() {
@@ -959,6 +1046,7 @@ function writeURL() {
   if (state.view === "level" && state.profession && state.profession !== FAV) u.set("view", "level");
   if (state.view === "cooldowns") u.set("view", state.view);
   if (state.levelMode !== "vendor") u.set("results", state.levelMode);
+  if (state.levelSrc !== "trainer,boe") u.set("src", state.levelSrc);
   if ($("deposit").checked) u.set("deposit", $("duration").value);
   const q = $("search").value.trim();
   if (q) u.set("q", q);
@@ -967,6 +1055,7 @@ function writeURL() {
   if ($("cut").value !== "5") u.set("cut", $("cut").value);
   if (!$("craftMats").checked) u.set("craft", "0");
   for (const [k, id] of Object.entries(FLAGS)) if ($(id).checked) u.set(k, "1");
+  if ($("marginMode").value !== "any" && $("marginPct").value.trim()) u.set("margin", $("marginMode").value + $("marginPct").value.replace(",", "."));
   const next = u.toString() ? `?${u}` : location.pathname;
   if (next !== location.search && !(next === location.pathname && !location.search)) history.replaceState(null, "", next);
 }
@@ -981,7 +1070,7 @@ function renderTheme() {
 // locally start.bat serves them live from SavedVariables.
 const HOSTED = !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
 const DATA = HOSTED
-  ? { prices: () => `data/prices.json?t=${Date.now()}`, history: () => `data/history.json?t=${Date.now()}`, recipes: "data/recipes.json?v=e18fcf2add" }
+  ? { prices: () => `data/prices.json?t=${Date.now()}`, history: () => `data/history.json?t=${Date.now()}`, recipes: "data/recipes.json?v=a9e40a9047" }
   : { prices: () => "/api/prices", history: () => "/api/history", recipes: "/api/recipes" };
 
 async function loadPrices() {
@@ -990,6 +1079,10 @@ async function loadPrices() {
     if (data.mtime === state.pricesMtime && !data.error) return;
     state.pricesMtime = data.mtime;
     state.prices = data;
+    // the local server adds your /cf stars and the recipe prices you've seen
+    state.cfFavs = new Set(data.mine?.favs || []);
+    state.recipeBuy = data.mine?.recipeBuy || {};
+    renderProfs();
     state.cascade++;   // a new scan remounts the rows
     // the history gains a point with each new scan; without it the trend lines just stay hidden
     try { state.history = await (await fetch(DATA.history())).json(); } catch (e) { state.history = null; }
@@ -1009,6 +1102,7 @@ async function init() {
   state.recipes = data.recipes;
   state.items = data.items;
   state.ranks = data.ranks || {};
+  state.recipeItems = data.recipeItems || {};
   for (const r of state.recipes) {
     state.profCounts[r.profession] = (state.profCounts[r.profession] || 0) + 1;
     if (r.creates) (state.byProduct[r.creates[0]] ||= []).push(r);
@@ -1070,6 +1164,14 @@ function tipHeader(icon, name, quality, sub) {
 }
 
 function tipHTML(kind, id) {
+  const plan = state.levelPlan;
+  if (kind === "plan") {
+    if (!plan) return "";
+    const back = { vendor: "Vendored back", de: "Disenchanted back", ah: "Sold on the AH" }[state.levelMode];
+    return `<div class="tip-sec">${tipLine("Materials", money(-plan.buy))}
+      ${tipLine(plan.recipes.length ? "Trainers & recipes" : "Trainers", money(-plan.fees))}
+      ${tipLine(back, money(plan.back))}</div>`;
+  }
   const o = opts();
   const resolve = makeBuyResolver(o);
   if (kind === "recipe") {
@@ -1157,6 +1259,7 @@ $("rows").addEventListener("click", (e) => {
   const fav = e.target.closest("[data-fav]");
   if (fav) {
     const id = Number(fav.dataset.fav);
+    if (state.cfFavs.has(id)) return;   // starred in /cf: unstar it there
     state.favs.has(id) ? state.favs.delete(id) : state.favs.add(id);
     save("cf-favs", [...state.favs]);
     renderProfs(); render();
@@ -1214,6 +1317,11 @@ for (const id of ["barter", "repDiscount"]) $(id).addEventListener("change", () 
   render();
 });
 $("duration").addEventListener("change", render);
+$("marginMode").addEventListener("change", () => { $("marginLimit").hidden = $("marginMode").value === "any"; refilter(); });
+$("marginPct").addEventListener("input", (e) => {
+  e.target.value = e.target.value.replace(/[^0-9.,-]/g, "").slice(0, 5);
+  refilter();
+});
 $("viewTabs").addEventListener("click", (e) => {
   const b = e.target.closest("[data-view]");
   if (!b || b.dataset.view === state.view) return;
@@ -1227,6 +1335,11 @@ $("level").addEventListener("input", (e) => {
   renderLevel();
 });
 $("level").addEventListener("change", (e) => {
+  if (e.target.matches("[data-src]")) {
+    state.levelSrc = [...$("level").querySelectorAll("[data-src]")].filter((c) => c.checked).map((c) => c.dataset.src).join(",");
+    writeURL();
+    return renderLevel();
+  }
   if (e.target.id !== "lvMode") return;
   state.levelMode = e.target.value;
   writeURL();

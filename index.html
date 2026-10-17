@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Azeret+Mono:wght@400;500;600&display=swap">
   <link rel="icon" type="image/png" href="favicon.png?v=79615db9a3">
   <link rel="icon" href="favicon.ico?v=212200aaed" sizes="16x16 32x32 48x48">
-  <link rel="stylesheet" href="style.css?v=039deec167">
+  <link rel="stylesheet" href="style.css?v=cd610f8545">
 </head>
 <body>
   <div class="app">
@@ -61,6 +61,16 @@
             <option value="20">20%</option>
           </select>
         </label>
+        <div class="row-between" title="Only list recipes whose margin (profit over cost) is at least, or at most, this percentage">Margin
+          <span class="cut">
+            <select id="marginMode" class="select select-sm" aria-label="Margin limit">
+              <option value="any">Any</option>
+              <option value="min">At least</option>
+              <option value="max">At most</option>
+            </select>
+            <span id="marginLimit" class="cut" hidden><input id="marginPct" class="cut-input" type="text" inputmode="decimal" value="20" aria-label="Margin percentage">%</span>
+          </span>
+        </div>
         <span class="hint">Vendor prices are from Wowhead. Discounts are saved in this browser.</span>
       </div>
 
@@ -83,7 +93,7 @@
 
       <div class="view-tabs" id="viewTabs" role="tablist" hidden>
         <button type="button" role="tab" data-view="recipes">Recipes</button>
-        <button type="button" role="tab" data-view="level">Cheapest leveling path</button>
+        <button type="button" role="tab" data-view="level">Profession leveling</button>
         <button type="button" role="tab" data-view="cooldowns">Cooldowns</button>
       </div>
 
@@ -106,6 +116,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=67837f0212"></script>
+  <script src="app.js?v=622aef442c"></script>
 </body>
 </html>

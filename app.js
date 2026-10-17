@@ -67,7 +67,7 @@ const isTrainer = (r) => !r.source?.length || r.source.includes(6) || !!r.traini
 
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-function money(value, plain = false) {
+function money(value) {
   if (value == null || !isFinite(value)) return `<span class="money muted">—</span>`;
   const v = Math.round(value), a = Math.abs(v);
   const g = Math.floor(a / 10000), s = Math.floor((a % 10000) / 100), c = a % 100;
@@ -75,7 +75,7 @@ function money(value, plain = false) {
   if (g) out += `<span>${g.toLocaleString("en-US")}<span class="u ug">g</span></span>`;
   if (s) out += `<span>${s}<span class="u us">s</span></span>`;
   if (c || a === 0) out += `<span>${c}<span class="u uc">c</span></span>`;
-  return `<span class="money${plain ? " plain" : ""}">${out}</span>`;
+  return `<span class="money">${out}</span>`;
 }
 
 const pct = (m) => (m == null ? "" : (m > 0 ? "+" : "") + m + "%");
@@ -96,18 +96,18 @@ const tweens = new WeakMap();
 function countUp(el, from, to, delay) {
   const t = tweens.get(el);
   if (t) { cancelAnimationFrame(t.raf); clearTimeout(t.done); }
-  if (reduceMotion.matches || document.hidden || from === to) { el.innerHTML = money(to, true); return; }
+  if (reduceMotion.matches || document.hidden || from === to) { el.innerHTML = money(to); return; }
   const t0 = performance.now();
   const tw = {};
-  el.innerHTML = money(from, true);
+  el.innerHTML = money(from);
   const step = (now) => {
     const k = Math.max(0, Math.min(1, (now - t0 - delay) / COUNT_MS));
-    el.innerHTML = money(from + (to - from) * (1 - Math.pow(1 - k, 3)), true);
+    el.innerHTML = money(from + (to - from) * (1 - Math.pow(1 - k, 3)));
     if (k < 1) tw.raf = requestAnimationFrame(step);
   };
   tw.raf = requestAnimationFrame(step);
   // frames can be paused (background tab); make sure the real number always lands
-  tw.done = setTimeout(() => { cancelAnimationFrame(tw.raf); el.innerHTML = money(to, true); }, delay + COUNT_MS + 100);
+  tw.done = setTimeout(() => { cancelAnimationFrame(tw.raf); el.innerHTML = money(to); }, delay + COUNT_MS + 100);
   tweens.set(el, tw);
 }
 
@@ -247,13 +247,12 @@ function render() {
     const product = r.creates ? state.items[r.creates[0]] : null;
     const qc = qColor(product ? product.quality : 1);
     // every row animates so none shows before the rows above it; past ANIM_ROWS they arrive together
-    const cascade = replay;
-    const delay = cascade ? `style="animation-delay:${Math.min(i, ANIM_ROWS) * ROW_STAGGER}ms"` : "";
-    html.push(`<div class="row${cascade ? " " + anim : ""}${open ? " open" : ""}" data-id="${r.id}" ${delay}>
+    const delay = replay ? `style="animation-delay:${Math.min(i, ANIM_ROWS) * ROW_STAGGER}ms"` : "";
+    html.push(`<div class="row${replay ? " " + anim : ""}${open ? " open" : ""}" data-id="${r.id}" ${delay}>
       <div class="recipe">
         <button type="button" class="fav${state.favs.has(r.id) ? " on" : ""}" data-fav="${r.id}" aria-label="${state.favs.has(r.id) ? "Remove from" : "Add to"} favorites" aria-pressed="${state.favs.has(r.id)}">★</button>
         <a class="icon-link" href="${WH}/${r.creates ? "item=" + r.creates[0] : "spell=" + r.id}" target="_blank" rel="noopener" data-tip="recipe:${r.id}" aria-label="${esc(r.name)} on Wowhead"><img class="row-icon" src="${ICON(product?.icon || r.icon)}" alt="" loading="lazy" style="--q:${qc}"></a>
-        <span class="recipe-name" style="color:${qc}">${esc(r.name)}${r.creates && r.creates[1] !== 1 ? ` <span class="recipe-meta">×${r.creates[1]}</span>` : ""}</span>
+        <span class="recipe-name" role="button" tabindex="0" aria-expanded="${open}" style="color:${qc}">${esc(r.name)}${r.creates && r.creates[1] !== 1 ? ` <span class="recipe-meta">×${r.creates[1]}</span>` : ""}</span>
         <span class="recipe-meta">${esc(r.profession)} · <span class="mono">${r.skill ?? "?"}</span></span>
       </div>
       <div class="num cell-mono${isFew(x) ? " few" : ""}" title="${isFew(x) ? `Only ${x.qty} listed: one seller sets this price, so it may not hold` : ""}">${x.qty ?? ""}</div>
@@ -261,7 +260,7 @@ function render() {
       <div class="num cell-sm" title="${x.viaVendor ? "Selling to a vendor pays more than the AH" : ""}">${money(x.sell)}${x.viaVendor && realm() ? `<div class="tag-line">vendor</div>` : ""}</div>
       <div class="num cell-sm">${money(x.cost.complete ? x.cost.total : null)}</div>
       <div class="num cell-mono muted">${pct(x.margin)}</div>
-      <div class="num ${x.profit == null ? "muted" : x.profit > 0 ? "p-pos" : "p-neg"}"><span class="pv" data-i="${i}">${money(x.profit, true)}</span></div>
+      <div class="num ${x.profit == null ? "muted" : x.profit > 0 ? "p-pos" : "p-neg"}"><span class="pv" data-i="${i}">${money(x.profit)}</span></div>
     </div>`);
     if (open) html.push(detail(x, o));
   });
@@ -311,7 +310,6 @@ function renderCards(all) {
     box.innerHTML = top.map((x, i) => {
       const it = state.items[x.r.creates[0]] || {};
       return `<div class="card" style="animation-delay:${i * 90}ms">
-        ${i === 0 ? `<div class="sheen"></div>` : ""}
         <div class="card-head">
           <a class="icon-link" href="${WH}/item=${x.r.creates[0]}" target="_blank" rel="noopener" data-tip="recipe:${x.r.id}" aria-label="${esc(x.r.name)} on Wowhead"><img class="card-icon" src="${ICON(it.icon)}" alt="" style="--q:${qColor(it.quality)}"></a>
           <a class="card-name" href="${WH}/item=${x.r.creates[0]}" target="_blank" rel="noopener" style="color:${qColor(it.quality)}">${esc(x.r.name)}</a>
@@ -362,7 +360,7 @@ function detailBody(x, o, n) {
     totals = `<div class="totals">
       <span class="muted">Cost${n > 1 ? ` ×${n}` : ""}</span><span class="num">${money(x.cost.complete ? x.cost.total * n : null)}</span>
       ${x.sell != null ? `<span class="muted">Sells for${n > 1 ? ` ×${n}` : ""}${x.fee ? `, after ${o.cut}% AH cut` : ""}${x.deposit ? " and deposit" : ""}</span><span class="num">${money((x.sell - x.fee - x.deposit) * n)}</span>` : ""}
-      ${x.profit != null ? `<span class="muted">Profit</span><span class="num ${x.profit > 0 ? "p-pos" : "p-neg"}">${money(x.profit * n, true)}</span>` : ""}
+      ${x.profit != null ? `<span class="muted">Profit</span><span class="num ${x.profit > 0 ? "p-pos" : "p-neg"}">${money(x.profit * n)}</span>` : ""}
     </div>`;
   }
   const trend = x.r.creates ? trendHTML(x.r.creates[0], 160) : "";
@@ -460,14 +458,25 @@ function skillChance(r, s) {
 // Classic disenchanting, as expected units per disenchant. Uncommon rows by highest item level:
 // [dust, dust qty, essence, essence qty, shard]; armor gives 75% dust / 20% essence / 5% shard,
 // weapons swap dust and essence.
-const DE_UNCOMMON = [
-  [15, 10940, 1.5, 10938, 1.5, null], [20, 10940, 2.5, 10939, 1.5, 10978], [25, 10940, 5, 10998, 1.5, 10978],
-  [30, 11083, 1.5, 11082, 1.5, 11084], [35, 11083, 3.5, 11134, 1.5, 11138], [40, 11137, 1.5, 11135, 1.5, 11139],
-  [45, 11137, 3.5, 11174, 1.5, 11177], [50, 11176, 1.5, 11175, 1.5, 11178], [55, 11176, 3.5, 16202, 1.5, 14343],
-  [60, 16204, 1.5, 16203, 1.5, 14344], [Infinity, 16204, 3.5, 16203, 2.5, 14344],
+// Greens: [up to item level, [dust id, lo, hi], [essence id, lo, hi], [shard id, chance] | null, essence chance]
+// (weapons swap the dust and essence chances). The addon's Core.lua has the same table.
+const GREEN_DE = [
+  [15, [10940, 1, 2], [10938, 1, 2], null, 0.20],
+  [20, [10940, 2, 3], [10939, 1, 2], [10978, 0.05], 0.20],
+  [25, [10940, 4, 6], [10998, 1, 2], [10978, 0.10], 0.15],
+  [30, [11083, 1, 2], [11082, 1, 2], [11084, 0.05], 0.20],
+  [35, [11083, 2, 5], [11134, 1, 2], [11138, 0.05], 0.20],
+  [40, [11137, 1, 2], [11135, 1, 2], [11139, 0.05], 0.20],
+  [45, [11137, 2, 5], [11174, 1, 2], [11177, 0.05], 0.20],
+  [50, [11176, 1, 2], [11175, 1, 2], [11178, 0.05], 0.20],
+  [55, [11176, 2, 5], [16202, 1, 2], [14343, 0.05], 0.20],
+  [60, [16204, 1, 2], [16203, 1, 2], [14344, 0.05], 0.20],
+  [Infinity, [16204, 2, 5], [16203, 2, 3], [14344, 0.05], 0.20],
 ];
-const DE_RARE = [[25, 10978], [30, 11084], [35, 11138], [40, 11139], [45, 11177], [50, 11178], [55, 14343], [Infinity, 14344]];
-const DE_EPIC = [[45, 11177, 3], [50, 11178, 3], [55, 14343, 3], [60, 20725, 1], [Infinity, 20725, 1.5]];
+// blues: one shard (the top bracket has a small chance at a Nexus Crystal)
+const BLUE_DE = [[25, 10978], [30, 11084], [35, 11138], [40, 11139], [45, 11177], [50, 11178], [55, 14343], [Infinity, 14344]];
+// purples: [up to item level, id, lo, hi]
+const PURPLE_DE = [[45, 11177, 2, 4], [50, 11178, 2, 4], [55, 14343, 2, 4], [60, 20725, 1, 1], [Infinity, 20725, 1, 2]];
 
 // [[material id, expected units], ...] from disenchanting one item, or null if it can't be.
 function deMats(id) {
@@ -475,13 +484,19 @@ function deMats(id) {
   if (!it?.de || !it.ilvl || it.ilvl < 5 || it.quality < 2) return null;
   const row = (t) => t.find((x) => it.ilvl <= x[0]);
   if (it.quality === 2) {
-    const [, dust, dq, ess, eq, shard] = row(DE_UNCOMMON);
-    const [pd, pe] = it.de === "weapon" ? [0.2, 0.75] : [it.ilvl <= 15 ? 0.8 : 0.75, 0.2];
-    return [[dust, pd * dq], [ess, pe * eq], ...(shard ? [[shard, 0.05]] : [])];
+    const [, dust, ess, shard, essP] = row(GREEN_DE);
+    const sp = shard ? shard[1] : 0;
+    let pd = 1 - sp - essP, pe = essP;
+    if (it.de === "weapon") [pd, pe] = [pe, pd];
+    return [[dust[0], pd * (dust[1] + dust[2]) / 2], [ess[0], pe * (ess[1] + ess[2]) / 2], ...(shard ? [[shard[0], sp]] : [])];
   }
-  if (it.quality === 3) return [[row(DE_RARE)[1], 1]];
-  const [, mat, q] = row(DE_EPIC);
-  return [[mat, q]];
+  if (it.quality === 3) {
+    const r = row(BLUE_DE);
+    return r[0] === Infinity ? [[r[1], 0.995], [20725, 0.005]] : [[r[1], 1]];
+  }
+  if (it.ilvl < 40) return null;
+  const [, mat, lo, hi] = row(PURPLE_DE);
+  return [[mat, (lo + hi) / 2]];
 }
 
 // What one unit of a leftover result is worth: vendored, disenchanted or sold on the AH.
@@ -1009,7 +1024,7 @@ async function init() {
 
 // ---------------------------------------------------------------- hover tooltip
 
-const QUALITY_NAME = ["Poor", "Common", "Uncommon", "Rare", "Epic", "Legendary"];
+const QUALITY_NAME = QUALITY.map((q) => q[0].toUpperCase() + q.slice(1));
 
 function tipLine(label, value) {
   return `<div class="tip-line"><span>${label}</span><span>${value}</span></div>`;
@@ -1072,7 +1087,7 @@ function tipHTML(kind, id) {
       body += `<div class="tip-sec">${tipLine("Sells for", money(x.sell) + (x.viaVendor ? ` <span class="muted">vendor</span>` : ""))}
         ${x.fee ? tipLine(`AH cut ${o.cut}%`, money(-x.fee)) : ""}
         ${x.deposit ? tipLine("Deposit", money(-x.deposit)) : ""}
-        <div class="tip-line tip-profit ${x.profit > 0 ? "pos" : "neg"}"><span>Profit</span><span>${money(x.profit, true)}</span></div></div>`;
+        <div class="tip-line tip-profit ${x.profit > 0 ? "pos" : "neg"}"><span>Profit</span><span>${money(x.profit)}</span></div></div>`;
     }
     const url = `${WH}/${pid ? "item=" + pid : "spell=" + r.id}`;
     return tipHeader(it.icon || r.icon, pid ? it.name || r.name : r.name, pid ? it.quality : 1, sub) + body +
@@ -1152,10 +1167,7 @@ $("rows").addEventListener("click", (e) => {
     const r = state.recipes.find((x) => x.id === Number(copy.dataset.copy));
     const o = opts();
     const text = shoppingText(evaluate(r, o, makeBuyResolver(o)), state.make.get(r.id) || 1);
-    navigator.clipboard.writeText(text).then(() => {
-      copy.textContent = "Copied";
-      setTimeout(() => { copy.textContent = "Copy shopping list"; }, 1500);
-    }, () => { copy.textContent = "Couldn't copy"; });
+    copyText(copy, text, "Copy shopping list");
     return;
   }
   if (e.target.closest("a, input, .shop-bar")) return;
@@ -1164,6 +1176,15 @@ $("rows").addEventListener("click", (e) => {
   const id = Number(row.dataset.id);
   state.open.has(id) ? state.open.delete(id) : state.open.add(id);
   render();
+});
+// the recipe name is the row's keyboard toggle; the rows redraw, so focus goes back to it
+$("rows").addEventListener("keydown", (e) => {
+  if ((e.key !== "Enter" && e.key !== " ") || !e.target.matches(".row .recipe-name")) return;
+  e.preventDefault();
+  const id = Number(e.target.closest(".row").dataset.id);
+  state.open.has(id) ? state.open.delete(id) : state.open.add(id);
+  render();
+  $("rows").querySelector(`.row[data-id="${id}"] .recipe-name`)?.focus();
 });
 $("profs").addEventListener("click", (e) => {
   const b = e.target.closest(".prof");

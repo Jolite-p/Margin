@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Azeret+Mono:wght@400;500;600&display=swap">
   <link rel="icon" type="image/png" href="favicon.png?v=79615db9a3">
   <link rel="icon" href="favicon.ico?v=212200aaed" sizes="16x16 32x32 48x48">
-  <link rel="stylesheet" href="style.css?v=d0174b4ae5">
+  <link rel="stylesheet" href="style.css?v=039deec167">
 </head>
 <body>
   <div class="app">
@@ -27,7 +27,7 @@
 
       <div class="scan" id="scan"></div>
 
-      <input id="search" class="search" type="search" placeholder="Search…" autocomplete="off">
+      <input id="search" class="search" type="search" placeholder="Search…" aria-label="Search recipes" autocomplete="off">
 
       <nav class="group profs" id="profs" aria-label="Profession">
         <span class="label">Profession</span>
@@ -35,7 +35,7 @@
 
       <div class="group pricing">
         <span class="label">Pricing</span>
-        <select id="basis" class="select">
+        <select id="basis" class="select" aria-label="Price basis">
           <option value="market">Market (cheapest 25%)</option>
           <option value="min">Minimum buyout</option>
         </select>
@@ -106,6 +106,6 @@
     </main>
   </div>
 
-  <script src="app.js?v=ae9a1035b6"></script>
+  <script src="app.js?v=67837f0212"></script>
 </body>
 </html>

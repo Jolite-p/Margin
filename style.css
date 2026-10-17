@@ -28,7 +28,7 @@
   --q-rare: #4f8fd6;
   --q-epic: #a874e0;
   --q-legendary: #e8923a;
-  --f-body: "Gotham Narrow", "Montserrat", system-ui, sans-serif;
+  --f-body: "Sofia Sans Semi Condensed", system-ui, sans-serif;
   --f-mono: var(--f-body);
   color-scheme: dark;
 }
